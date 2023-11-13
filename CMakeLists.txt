@@ -49,7 +49,7 @@ catkin_package(
 
 include_directories(
   include
-    ${RBDL_INCLUDE_DIR}
+  ${RBDL_INCLUDE_DIR}
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
   ${Franka_INCLUDE_DIRS}
@@ -59,6 +59,8 @@ include_directories(
 
 
 add_library(${PROJECT_NAME}
+src/default_controller.cpp
+src/jh_controller.cpp
 src/collision_detection_controller.cpp
 src/collision_detection_controller.cpp
 src/jaesug_controller.cpp
