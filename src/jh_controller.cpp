@@ -15,29 +15,29 @@
 
 int kbhit(void)
 {
-	struct termios oldt, newt;
-	int ch;
-	int oldf;
+    struct termios oldt, newt;
+    int ch;
+    int oldf;
 
-	tcgetattr(STDIN_FILENO, &oldt);
-	newt = oldt;
-	newt.c_lflag &= ~(ICANON | ECHO);
-	tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-	oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
-	fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
 
-	ch = getchar();
+    ch = getchar();
 
-	tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-	fcntl(STDIN_FILENO, F_SETFL, oldf);
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    fcntl(STDIN_FILENO, F_SETFL, oldf);
 
-	if(ch != EOF)
-	{
-	ungetc(ch, stdin);
-	return 1;
-	}
+    if(ch != EOF)
+    {
+    ungetc(ch, stdin);
+    return 1;
+    }
 
-	return 0;
+    return 0;
 }
 
 namespace advanced_robotics_franka_controllers
@@ -108,6 +108,11 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   qdot_desired_.setZero();
   torque_desired_.setZero();
 
+  // robot_ = std::make_shared<NJSDF::RobotModel>();
+
+  njsdf_qp_ = std::make_shared<NJSDF::QP>(obs_radius_, njsdf_hz_);
+  async_njsdf_thread_ = std::thread(&jh_controller::asyncNJSDFProc, this);
+
 
   return true;
 }
@@ -122,6 +127,9 @@ void jh_controller::starting(const ros::Time& time) {
   q_init_ = q_;
   qdot_init_ = qdot_;
   
+  // robot_->getUpdateKinematics(q_, qdot_);
+  // transform_ = robot_->getTransformation(NJSDF::num_links);
+
   const franka::RobotState &robot_state = state_handle_->getRobotState();
   transform_ = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());  
 
@@ -135,7 +143,7 @@ void jh_controller::starting(const ros::Time& time) {
 
 void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
 {
-
+  // std::cout<<"elapsed time: " << bench_timer_.elapsedAndReset()*1000 << std::endl;
   jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
 
   if(calculation_mutex_.try_lock())
@@ -156,9 +164,11 @@ void jh_controller::update(const ros::Time& time, const ros::Duration& period)
       }
   }
 
-  jh_controller::printState();
-  play_time_ = time;
-  jh_controller::setDesiredTorque(torque_desired_);
+ jh_controller::printState();
+ play_time_ = time;
+ jh_controller::setDesiredTorque(torque_desired_);
+
+//  bench_timer_.reset();
 }
 
 void jh_controller::stopping(const ros::Time & /*time*/)
@@ -167,7 +177,8 @@ void jh_controller::stopping(const ros::Time & /*time*/)
 }
 // ------------------------------------------------------------------------------------------------
 
-// --------------------------- funciotn from robotics class -----------------------------------------
+// --------------------------- funciotn -----------------------------------------
+
 void jh_controller::printState()
 {
   if (print_rate_trigger_()) 
@@ -204,6 +215,8 @@ void jh_controller::moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> &t
   double kp, kv;
   kp = 1500;
   kv = 10;
+  // kp = 400;
+  // kv = 40;
 
   torque_desired_ = m_ * ( kp*(q_desired_ - q_) + kv*(qdot_desired_ - qdot_)) + c_;
 }
@@ -225,18 +238,26 @@ void jh_controller::getCurrentState()
   const std::array<double, 49> &massmatrix_array = model_handle_->getMass();
   const std::array<double, 7> &coriolis_array = model_handle_->getCoriolis();
 
-
+  njsdf_input_mutex_.lock();
   q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
+
+  // robot_->getUpdateKinematics(q_, qdot_);
+  // transform_ = robot_->getTransformation(NJSDF::num_links);
+  // j_ = robot_->getJacobian(NJSDF::num_links);
+
+  transform_ = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());  
+  j_ = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
+
+  njsdf_input_mutex_.unlock();
+
   qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
   torque_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
   g_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(gravity_array.data());
   m_ = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(massmatrix_array.data());
   m_inv_ = m_.inverse();
   c_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(coriolis_array.data());
-  j_ = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
   j_v_ = j_.block<3, 7>(0, 0);
   j_w_ = j_.block<3, 7>(3, 0);
-  transform_ = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());  
   x_ = transform_.translation();
   rotation_ = transform_.rotation();
   x_dot_ = j_ * qdot_;
@@ -248,6 +269,35 @@ void jh_controller::setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired
     joint_handles_[i].setCommand(desired_torque(i));
   }
 }
+
+void jh_controller::asyncNJSDFProc()
+  {
+    while(!quit_all_proc_)
+    {
+      while (njsdf_thread_enabled_)
+      {
+        njsdf_input_mutex_.lock();
+        njsdf_qp_->setCurrentState(transform_, q_, j_);
+        njsdf_qp_->setDesiredState(target_ee_pose_);
+        njsdf_qp_->setObsPosition(obs_position_);
+        njsdf_input_mutex_.unlock();
+
+        bool is_solved = njsdf_qp_->solveQP(false);
+        
+        if(is_solved)
+        {
+          njsdf_mutex_.lock();
+          opt_dq_ = njsdf_qp_->getJointDisplacement();
+          njsdf_mutex_.unlock();
+        }
+        else
+        {
+          ROS_INFO("QP did not solved!!!");
+          opt_dq_.setZero();
+        }
+      }
+    }
+  }
 
 void jh_controller::asyncCalculationProc()
   {
@@ -262,6 +312,20 @@ void jh_controller::asyncCalculationProc()
       x_init_ = x_;
       rotation_init_ = rotation_;
       transform_init_ = transform_;
+      njsdf_thread_enabled_ = false;
+      if (control_mode_==NJSDF) 
+      {
+        njsdf_thread_enabled_ = true; 
+        obs_position_ << 0.5, 0.0, 0.5;
+        // obs_position_ << 0.5, 0.0, 10.45;
+        target_ee_pose_ = transform_init_;
+        target_ee_pose_.translation() << 0.5, 0.5, 0.5;
+        // target_ee_pose_.translation() << 0.5, 0.0, 0.5;
+        target_ee_vel_ << 0, -0.05, 0;
+        q_desired_ = q_init_;
+
+      }
+      else njsdf_thread_enabled_ = false;
     }
 
     if(control_mode_ == HOME)
@@ -270,6 +334,22 @@ void jh_controller::asyncCalculationProc()
       target_q << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
       target_q << 0.516,  0.447,  0.384, -1.085, -0.143, 1.587,  1.517;
       jh_controller::moveJointPositionTorque(target_q, 5.0);
+    }
+    else if(control_mode_ == NJSDF)
+    {
+      target_ee_pose_.translation() += target_ee_vel_ / hz_;
+      target_ee_pose_.translation()(1) = std::min(0.5, std::max(-0.5, target_ee_pose_.translation()(1)));
+      if(njsdf_trigger_())
+      {
+        bench_timer_.reset();
+        q_desired_ += opt_dq_ * (njsdf_hz_ / hz_);
+        // std::cout<<"elapsed time: " << bench_timer_.elapsedAndReset()*1000 << std::endl;
+      }
+
+      double kp, kv;
+      kp = 1500;
+      kv = 10;
+      torque_desired_ = m_ * ( kp*(q_desired_ - q_) + kv*(opt_dq_*njsdf_hz_ - qdot_)) + c_;
     }
     else
     {
@@ -293,6 +373,9 @@ void jh_controller::modeChangeReaderProc()
           case 'h':
             jh_controller::setMode(HOME);
             break;
+          case 'n':
+            jh_controller::setMode(NJSDF);
+            break;
           default:
             jh_controller::setMode(NONE);
             break;
@@ -303,8 +386,6 @@ void jh_controller::modeChangeReaderProc()
     }
 }
 // ------------------------------------------------------------------------------------------------
-
-
 
 
 } // namespace advanced_robotics_franka_controllers

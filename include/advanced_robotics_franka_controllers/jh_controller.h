@@ -21,7 +21,9 @@
 #include <geometry_msgs/Twist.h>
 #include <Eigen/Dense>
 
-#include "suhan_benchmark.h"
+#include "advanced_robotics_franka_controllers/NJSDF.h"
+#include "advanced_robotics_franka_controllers/robot.h"
+#include <suhan_benchmark.h>
 
 namespace advanced_robotics_franka_controllers {
 
@@ -41,6 +43,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   std::vector<hardware_interface::JointHandle> joint_handles_;
 
   franka_hw::TriggerRate print_rate_trigger_{10}; 
+
+  std::shared_ptr<NJSDF::RobotModel> robot_;
 	
   // initial state
   Eigen::Matrix<double, 7, 1> q_init_;
@@ -91,11 +95,26 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   CTRL_MODE control_mode_{NONE};
 	bool is_mode_changed_ {false};
 
+
+  std::shared_ptr<NJSDF::QP> njsdf_qp_;
+  const double njsdf_hz_{100};
+  franka_hw::TriggerRate njsdf_trigger_{njsdf_hz_}; 
+  double obs_radius_{0.10};
+  Eigen::Vector3d obs_position_;
+  Eigen::Affine3d target_ee_pose_;
+  Eigen::Vector3d target_ee_vel_;
+  Eigen::Matrix<double, 7, 1> opt_dq_;
+
+  
   std::mutex calculation_mutex_;
+  std::mutex njsdf_input_mutex_;
+  std::mutex njsdf_mutex_;
 
   bool quit_all_proc_{false};
   std::thread async_calculation_thread_;
+  std::thread async_njsdf_thread_;
   std::thread mode_change_thread_;
+  bool njsdf_thread_enabled_{false};
 
   void printState();
   void moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
@@ -106,6 +125,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 
   void modeChangeReaderProc();
   void asyncCalculationProc();
+  void asyncNJSDFProc();
 };
 
 }  // namespace advanced_robotics_franka_controllers

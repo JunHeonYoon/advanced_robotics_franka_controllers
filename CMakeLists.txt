@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 2.8.3)
+ cmake_minimum_required(VERSION 2.8.3)
+#cmake_minimum_required(VERSION 3.1)
 project(advanced_robotics_franka_controllers)
 
 set(CMAKE_CXX_STANDARD 14)
@@ -28,6 +29,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 find_package(Eigen3 REQUIRED)
 find_package(Franka 0.5.0 REQUIRED)
+find_package(OsqpEigen REQUIRED)
 
 catkin_package(
   LIBRARIES ${PROJECT_NAME}
@@ -108,6 +110,8 @@ src/robot_model.cpp
 src/torque_joint_space_controller_joint_test.cpp
 src/position_joint_space_controller_joint_test.cpp
 src/velocity_joint_space_controller.cpp
+src/NJSDF.cpp
+src/robot.cpp
 )
 
 add_dependencies(advanced_robotics_franka_controllers
@@ -121,7 +125,9 @@ add_dependencies(advanced_robotics_franka_controllers
 target_link_libraries(${PROJECT_NAME} PUBLIC
   ${Franka_LIBRARIES}
   ${catkin_LIBRARIES}
-    ${RBDL_LIBRARY}
+  ${RBDL_LIBRARY}
+  ${RBDL_URDFReader_LIBRARY}
+  OsqpEigen::OsqpEigen
 
 )
 #############
