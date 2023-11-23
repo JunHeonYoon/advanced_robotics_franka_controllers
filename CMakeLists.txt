@@ -63,7 +63,6 @@ src/default_controller.cpp
 src/jh_controller.cpp
 src/collision_detection_controller.cpp
 src/collision_detection_controller.cpp
-src/jaesug_controller.cpp
 #src/position_joint_space_slam_test_controller.cpp
 #src/impedance_controller.cpp
 #src/test_controller1.cpp
@@ -77,7 +76,6 @@ src/position_joint_space_controller.cpp
 #src/velocity_task_space_controller.cpp
 #src/velocity_joint_space_controller.cpp
 #src/velocity_joint_space_controller_dob.cpp
-src/suhan_controller.cpp
 #src/hw1_controller.cpp
 src/torque_joint_space_controller.cpp
 #src/torque_joint_space_controller_sy.cpp

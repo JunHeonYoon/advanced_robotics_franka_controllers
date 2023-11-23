@@ -102,6 +102,13 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
       return false;
     }
   }
+
+  mode_change_thread_ = std::thread(&jh_controller::modeChangeReaderProc, this);
+  q_desired_.setZero();
+  qdot_desired_.setZero();
+  torque_desired_.setZero();
+
+
   return true;
 }
 
@@ -109,69 +116,64 @@ void jh_controller::starting(const ros::Time& time) {
   start_time_ = time;
 	
   for (size_t i = 0; i < 7; ++i) {
-    q_init_(i) = joint_handles_[i].getPosition();
-    qdot_init_(i) = joint_handles_[i].getVelocity();
+    q_(i) = joint_handles_[i].getPosition();
+    qdot_(i) = joint_handles_[i].getVelocity();
   }
+  q_init_ = q_;
+  qdot_init_ = qdot_;
   
   const franka::RobotState &robot_state = state_handle_->getRobotState();
-  transform_init_ = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());  
-  x_init_ = transform_init_.translation();
-  rotation_init_ = transform_init_.rotation();
+  transform_ = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());  
+
+
+  x_ = transform_.translation();
+  rotation_ = transform_.rotation();
+  transform_init_ = transform_;
+  x_init_ = x_;
+  rotation_init_ = rotation_;
 }
 
 void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
 {
- if(kbhit())
- {
-  int key = getchar();
-  switch (key)
+
+  jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
+
+  if(calculation_mutex_.try_lock())
   {
-    case 'h':
-      jh_controller::setMode("joint_ctrl_home");
-      break;
-    default:
-      break;
+      calculation_mutex_.unlock();
+      if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
+      async_calculation_thread_ = std::thread(&jh_controller::asyncCalculationProc, this);
   }
- } 
- jh_controller::compute();
- play_time_ = time;
- jh_controller::setDesiredTorque(torque_desired_);
+  ros::Rate r(30000);
+  for(size_t i=0; i<9; ++i)
+  {
+      r.sleep();
+      if(calculation_mutex_.try_lock())
+      {
+          calculation_mutex_.unlock();
+          if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
+          break;
+      }
+  }
+
+  jh_controller::printState();
+  play_time_ = time;
+  jh_controller::setDesiredTorque(torque_desired_);
+}
+
+void jh_controller::stopping(const ros::Time & /*time*/)
+{
+  ROS_INFO("jh_controller::stopping");
 }
 // ------------------------------------------------------------------------------------------------
 
 // --------------------------- funciotn from robotics class -----------------------------------------
-void jh_controller::compute()
-{
-  jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
-
-  if(is_mode_changed_)
-  {
-    is_mode_changed_ = false;
-    control_start_time_ = play_time_;
-    q_init_ = q_;
-    qdot_init_ = qdot_;
-    x_init_ = x_;
-    rotation_init_ = rotation_;
-  }
-
-  if(control_mode_ == "joint_ctrl_home")
-  {
-    Eigen::Matrix<double, 7, 1> target_q;
-    target_q << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
-    jh_controller::moveJointPositionTorque(target_q, 5.0);
-  }
-  else
-  {
-    torque_desired_ = c_;
-  }
-
-  jh_controller::printState();
-}
-
 void jh_controller::printState()
 {
   if (print_rate_trigger_()) 
     {
+    std::cout << "-------------------------------------------------------------------" << std::endl;
+    std::cout << "MODE     : " << control_mode_ << std::endl;
     std::cout << "time     : " << std::fixed << std::setprecision(3) << play_time_.toSec() << std::endl;
 		std::cout << "q now    :\t";
 		std::cout << std::fixed << std::setprecision(3) << q_.transpose() << std::endl;
@@ -181,8 +183,11 @@ void jh_controller::printState()
 		std::cout << x_.transpose() << std::endl;
 		std::cout << "R        :\t" << std::endl;
 		std::cout << std::fixed << std::setprecision(3) << rotation_ << std::endl;
+    std::cout << "J        :\t" << std::endl;
+		std::cout << std::fixed << std::setprecision(3) << j_ << std::endl;
     std::cout << "torque desired    :\t";
 		std::cout << std::fixed << std::setprecision(3) << torque_desired_.transpose() << std::endl;
+    std::cout << "-------------------------------------------------------------------\n\n" << std::endl;
   }
 }
 
@@ -204,7 +209,7 @@ void jh_controller::moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> &t
 }
 
 // --------------------------- Controller Core Methods -----------------------------------------
-void jh_controller::setMode(const std::string & mode)
+void jh_controller::setMode(const CTRL_MODE & mode)
 {
   is_mode_changed_ = true;
   control_mode_ = mode;
@@ -242,6 +247,60 @@ void jh_controller::setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired
   for (size_t i = 0; i < 7; ++i) {
     joint_handles_[i].setCommand(desired_torque(i));
   }
+}
+
+void jh_controller::asyncCalculationProc()
+  {
+    bench_timer_.reset();
+    calculation_mutex_.lock();
+    if(is_mode_changed_)
+    {
+      is_mode_changed_ = false;
+      control_start_time_ = play_time_;
+      q_init_ = q_;
+      qdot_init_ = qdot_;
+      x_init_ = x_;
+      rotation_init_ = rotation_;
+      transform_init_ = transform_;
+    }
+
+    if(control_mode_ == HOME)
+    {
+      Eigen::Matrix<double, 7, 1> target_q;
+      target_q << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
+      target_q << 0.516,  0.447,  0.384, -1.085, -0.143, 1.587,  1.517;
+      jh_controller::moveJointPositionTorque(target_q, 5.0);
+    }
+    else
+    {
+      torque_desired_ = c_;
+    }
+    calculation_mutex_.unlock();
+    double elapsed_time = bench_timer_.elapsedAndReset();
+    // std::cout << "elapsed_time: " << elapsed_time*1000.0 << std::endl;
+  }
+
+void jh_controller::modeChangeReaderProc()
+{
+   while (!quit_all_proc_)
+    {
+      if(kbhit())
+      {
+        calculation_mutex_.lock();
+        int key = getchar();
+        switch (key)
+        {
+          case 'h':
+            jh_controller::setMode(HOME);
+            break;
+          default:
+            jh_controller::setMode(NONE);
+            break;
+        }
+        calculation_mutex_.unlock();
+      }
+      
+    }
 }
 // ------------------------------------------------------------------------------------------------
 

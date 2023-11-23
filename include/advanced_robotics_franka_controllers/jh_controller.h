@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+#include <thread>
+#include <mutex>
+
 #include <controller_interface/multi_interface_controller.h>
 #include <dynamic_reconfigure/server.h>
 #include <franka_hw/franka_model_interface.h>
@@ -18,6 +21,8 @@
 #include <geometry_msgs/Twist.h>
 #include <Eigen/Dense>
 
+#include "suhan_benchmark.h"
+
 namespace advanced_robotics_franka_controllers {
 
 class jh_controller : public controller_interface::MultiInterfaceController<
@@ -28,6 +33,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle) override;
   void starting(const ros::Time& time) override;
   void update(const ros::Time& time, const ros::Duration& period) override;
+  void stopping(const ros::Time& time);
 
  private: 
   std::unique_ptr<franka_hw::FrankaModelHandle> model_handle_;
@@ -75,20 +81,31 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   Eigen::Affine3d transform_init_;
   Eigen::Affine3d transform_;
 
+  const double hz_{1000};
   ros::Time start_time_;
   ros::Time play_time_;
   ros::Time control_start_time_;
+  SuhanBenchmark bench_timer_;
 
-  std::string control_mode_;
-	bool is_mode_changed_;
+  enum CTRL_MODE{NONE, HOME, NJSDF};
+  CTRL_MODE control_mode_{NONE};
+	bool is_mode_changed_ {false};
 
-  void compute();
+  std::mutex calculation_mutex_;
+
+  bool quit_all_proc_{false};
+  std::thread async_calculation_thread_;
+  std::thread mode_change_thread_;
+
   void printState();
   void moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
   
-  void setMode(const std::string & mode);
+  void setMode(const CTRL_MODE & mode);
   void getCurrentState();
   void setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired_torque);
+
+  void modeChangeReaderProc();
+  void asyncCalculationProc();
 };
 
 }  // namespace advanced_robotics_franka_controllers
