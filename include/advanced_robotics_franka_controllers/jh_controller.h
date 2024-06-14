@@ -23,6 +23,20 @@
 
 #include "suhan_benchmark.h"
 
+#include <actionlib/client/simple_action_client.h>
+#include <actionlib/client/terminal_state.h>
+#include <franka_gripper/GraspAction.h>
+#include <franka_gripper/MoveAction.h>
+
+// ============== MPCC ==============
+#include <iostream>
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include "MPC/mpc.h"
+#include "Params/track.h"
+
+// ==================================
+
 namespace advanced_robotics_franka_controllers {
 
 class jh_controller : public controller_interface::MultiInterfaceController<
@@ -66,6 +80,10 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 	Eigen::Matrix<double, 6, 1> x_dot_;   // 6D (linear + angular)
 	Eigen::Matrix<double, 6, 1> x_error_;
 
+	Eigen::Matrix<double, 3, 1> x_rbdl_;
+	Eigen::Matrix<double, 3, 3> rotation_rbdl_;
+	Eigen::Matrix<double, 6, 7> j_rbdl_;
+
   // dynamics
   Eigen::Matrix<double, 7, 1> g_; // gravity matrix
   Eigen::Matrix<double, 7, 7> m_; // mass matrix
@@ -87,17 +105,22 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Time control_start_time_;
   SuhanBenchmark bench_timer_;
 
-  enum CTRL_MODE{NONE, HOME, NJSDF};
+  enum CTRL_MODE{NONE, HOME, MPCC};
   CTRL_MODE control_mode_{NONE};
 	bool is_mode_changed_ {false};
 
   std::mutex calculation_mutex_;
+  std::mutex input_mutex_;
 
   bool quit_all_proc_{false};
   std::thread async_calculation_thread_;
   std::thread mode_change_thread_;
 
+  actionlib::SimpleActionClient<franka_gripper::MoveAction> gripper_ac_
+  {"/franka_gripper/move", true};
+
   void printState();
+  Eigen::Matrix<double, 7, 1> PDControl(const Eigen::Matrix<double, 7, 1> & q_desired, const Eigen::Matrix<double, 7, 1> & qdot_desired);
   void moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
   
   void setMode(const CTRL_MODE & mode);
@@ -106,6 +129,39 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 
   void modeChangeReaderProc();
   void asyncCalculationProc();
+
+  // ============== MPCC ==============
+  struct PathParmeter
+  {
+    double s;
+    double vs;
+    double dVs;
+    void setZero(){s=0; vs=0; dVs=0;}
+  };
+
+  std::unique_ptr<mpcc::MPC> mpc_;
+  mpcc::PathToJson json_paths_;
+  // std::unique_ptr<franka_hw::TriggerRate> mpcc_trigger_;
+  franka_hw::TriggerRate mpcc_trigger_;
+
+  double Ts_mpcc_;
+  double hz_mpcc_;
+  Eigen::Matrix<double, 7, 1> mpcc_qdot_desired_;
+  double mpcc_dVs_desired_;
+  PathParmeter s_info_;
+  bool is_mpcc_solved_{false};
+
+  std::thread async_mpcc_thread_;
+  bool mpcc_thread_enabled_{false};
+  std::mutex mpcc_mutex_;
+  std::mutex mpcc_input_mutex_;
+
+  void asyncMPCCFProc();
+
+  // mpcc::State x0;
+  // bool is_first_mpcc = true;
+  std::unique_ptr<mpcc::Integrator> integrator_;
+  // ==================================
 };
 
 }  // namespace advanced_robotics_franka_controllers

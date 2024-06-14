@@ -33,11 +33,11 @@ def make_file(file_name, value):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print "How to use"
-        print sys.argv[0], "ControllerName"
+        print("How to use")
+        print(sys.argv[0], "ControllerName")
     elif len(sys.argv) == 2:
         controller_name = sys.argv[1]
-        print "making controller:", controller_name
+        print("making controller:", controller_name)
 
         modify_file("CMakeLists.txt",
                    "add_library\(\$\{PROJECT_NAME\}",

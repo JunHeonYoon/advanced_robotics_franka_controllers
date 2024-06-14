@@ -1,0 +1,7 @@
+
+{
+  "max_dist_proj": 0.1,
+  "desired_ee_velocity" : 0.1,
+  "s_trust_region" : 0.2,
+  "deaccelerate_ratio" : 0.80
+}

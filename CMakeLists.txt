@@ -1,8 +1,14 @@
-cmake_minimum_required(VERSION 2.8.3)
+# cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.10)
 project(advanced_robotics_franka_controllers)
 
-set(CMAKE_CXX_STANDARD 14)
+# set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_definitions(-DBUILD_DIRECTORY=\"${CMAKE_SOURCE_DIR}\")
+message(STATUS "BUILD_DIRECTORY = ${CMAKE_SOURCE_DIR}")
+
 
 
 LIST( APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/../rbdl" )
@@ -55,10 +61,17 @@ include_directories(
   ${Franka_INCLUDE_DIRS}
 )
 
+add_subdirectory(MPCC)
+
+include_directories(
+  ${CMAKE_SOURCE_DIR}/MPCC
+)
 
 
 
 add_library(${PROJECT_NAME}
+src/custom_controler.cpp
+src/custom_controler.cpp
 src/default_controller.cpp
 src/jh_controller.cpp
 src/collision_detection_controller.cpp
@@ -113,15 +126,16 @@ src/velocity_joint_space_controller.cpp
 add_dependencies(advanced_robotics_franka_controllers
   ${${PROJECT_NAME}_EXPORTED_TARGETS}
   ${catkin_EXPORTED_TARGETS}
-  ${PROJECT_NAME}_generate_messages_cpp
-  ${PROJECT_NAME}_gencpp
-  ${PROJECT_NAME}_gencfg
+  # ${PROJECT_NAME}_generate_messages_cpp
+  # ${PROJECT_NAME}_gencpp
+  # ${PROJECT_NAME}_gencfg
 )
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
   ${Franka_LIBRARIES}
   ${catkin_LIBRARIES}
     ${RBDL_LIBRARY}
+    MPCC_LIB
 
 )
 #############

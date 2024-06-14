@@ -13,6 +13,8 @@
 
 #include "math_type_define.h"
 
+#include <franka_gripper/GraspAction.h>
+
 int kbhit(void)
 {
 	struct termios oldt, newt;
@@ -104,10 +106,30 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   }
 
   mode_change_thread_ = std::thread(&jh_controller::modeChangeReaderProc, this);
+  async_mpcc_thread_ = std::thread(&jh_controller::asyncMPCCFProc, this);
   q_desired_.setZero();
   qdot_desired_.setZero();
   torque_desired_.setZero();
 
+  gripper_ac_.waitForServer();
+
+  // ============== MPCC ==============
+  std::ifstream iConfig(mpcc::pkg_path + "Params/config.json");
+  nlohmann::json jsonConfig;
+  iConfig >> jsonConfig;
+  json_paths_ = {mpcc::pkg_path + std::string(jsonConfig["model_path"]),
+                  mpcc::pkg_path + std::string(jsonConfig["cost_path"]),
+                  mpcc::pkg_path + std::string(jsonConfig["bounds_path"]),
+                  mpcc::pkg_path + std::string(jsonConfig["track_path"]),
+                  mpcc::pkg_path + std::string(jsonConfig["normalization_path"]),
+                  mpcc::pkg_path + std::string(jsonConfig["sqp_path"])};
+
+  Ts_mpcc_ = jsonConfig["Ts"];
+  hz_mpcc_ = 1./Ts_mpcc_;
+  mpc_ = std::make_unique<mpcc::MPC>(jsonConfig["Ts"],json_paths_);
+  mpcc_trigger_ = franka_hw::TriggerRate(hz_mpcc_);
+  integrator_ = make_unique<mpcc::Integrator>(Ts_mpcc_, json_paths_);
+  // ==================================
 
   return true;
 }
@@ -131,34 +153,35 @@ void jh_controller::starting(const ros::Time& time) {
   transform_init_ = transform_;
   x_init_ = x_;
   rotation_init_ = rotation_;
+
+  s_info_.setZero();
 }
 
 void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
 {
 
-  jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
+    jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
+    if(calculation_mutex_.try_lock())
+    {
+        calculation_mutex_.unlock();
+        if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
+        async_calculation_thread_ = std::thread(&jh_controller::asyncCalculationProc, this);
+    }
+    ros::Rate r(30000);
+    for(size_t i=0; i<9; ++i)
+    {
+        r.sleep();
+        if(calculation_mutex_.try_lock())
+        {
+            calculation_mutex_.unlock();
+            if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
+            break;
+        }
+    }
 
-  if(calculation_mutex_.try_lock())
-  {
-      calculation_mutex_.unlock();
-      if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
-      async_calculation_thread_ = std::thread(&jh_controller::asyncCalculationProc, this);
-  }
-  ros::Rate r(30000);
-  for(size_t i=0; i<9; ++i)
-  {
-      r.sleep();
-      if(calculation_mutex_.try_lock())
-      {
-          calculation_mutex_.unlock();
-          if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
-          break;
-      }
-  }
-
-  jh_controller::printState();
-  play_time_ = time;
-  jh_controller::setDesiredTorque(torque_desired_);
+    jh_controller::printState();
+    play_time_ = time;
+    jh_controller::setDesiredTorque(torque_desired_);
 }
 
 void jh_controller::stopping(const ros::Time & /*time*/)
@@ -174,21 +197,47 @@ void jh_controller::printState()
     {
     std::cout << "-------------------------------------------------------------------" << std::endl;
     std::cout << "MODE     : " << control_mode_ << std::endl;
-    std::cout << "time     : " << std::fixed << std::setprecision(3) << play_time_.toSec() << std::endl;
+    std::cout << "time     : " << std::fixed << std::setprecision(5) << play_time_.toSec() << std::endl;
 		std::cout << "q now    :\t";
-		std::cout << std::fixed << std::setprecision(3) << q_.transpose() << std::endl;
+		std::cout << std::fixed << std::setprecision(5) << q_.transpose() << std::endl;
 		std::cout << "q desired:\t";
-		std::cout << std::fixed << std::setprecision(3) << q_desired_.transpose() << std::endl;
+		std::cout << std::fixed << std::setprecision(5) << q_desired_.transpose() << std::endl;
 		std::cout << "x        :\t";
 		std::cout << x_.transpose() << std::endl;
 		std::cout << "R        :\t" << std::endl;
-		std::cout << std::fixed << std::setprecision(3) << rotation_ << std::endl;
-    std::cout << "J        :\t" << std::endl;
-		std::cout << std::fixed << std::setprecision(3) << j_ << std::endl;
+		std::cout << std::fixed << std::setprecision(5) << rotation_ << std::endl;
+    // std::cout << "J        :\t" << std::endl;
+		// std::cout << std::fixed << std::setprecision(5) << j_ << std::endl;
+    std::cout << "x_dot    :\t";
+		std::cout << x_dot_.norm() << std::endl;
+    if(mpcc_thread_enabled_)
+    {
+      std::cout << "s        :\t";
+		  std::cout << s_info_.s << std::endl;
+      std::cout << "vs       :\t";
+		  std::cout << s_info_.vs << std::endl;
+      std::cout << "dVs      :\t";
+		  std::cout << s_info_.dVs << std::endl;
+    }
     std::cout << "torque desired    :\t";
-		std::cout << std::fixed << std::setprecision(3) << torque_desired_.transpose() << std::endl;
+		std::cout << std::fixed << std::setprecision(5) << torque_desired_.transpose() << std::endl;
+
     std::cout << "-------------------------------------------------------------------\n\n" << std::endl;
   }
+}
+
+Eigen::Matrix<double, 7, 1> jh_controller::PDControl(const Eigen::Matrix<double, 7, 1> & q_desired, const Eigen::Matrix<double, 7, 1> & qdot_desired)
+{
+  Eigen::Vector7d Kp_diag, Kv_diag;
+  Kp_diag << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
+  Kv_diag << 50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0;
+
+  // double kp, kv;
+  // kp = 1600;
+  // kv = 10;
+
+  // return m_ * ( kp*(q_desired - q_) + kv*(qdot_desired - qdot_)) + c_;
+  return m_ * ( Kp_diag.asDiagonal()*(q_desired - q_) + Kv_diag.asDiagonal()*(qdot_desired - qdot_)) + c_;
 }
 
 void jh_controller::moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> &target_q, double duration)
@@ -201,11 +250,7 @@ void jh_controller::moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> &t
                                         q_init_(i), target_q(i), 0, 0);
   }
 
-  double kp, kv;
-  kp = 1500;
-  kv = 10;
-
-  torque_desired_ = m_ * ( kp*(q_desired_ - q_) + kv*(qdot_desired_ - qdot_)) + c_;
+  torque_desired_ = PDControl(q_desired_, qdot_desired_);
 }
 
 // --------------------------- Controller Core Methods -----------------------------------------
@@ -225,7 +270,7 @@ void jh_controller::getCurrentState()
   const std::array<double, 49> &massmatrix_array = model_handle_->getMass();
   const std::array<double, 7> &coriolis_array = model_handle_->getCoriolis();
 
-
+  input_mutex_.lock();
   q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
   qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
   torque_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
@@ -240,6 +285,25 @@ void jh_controller::getCurrentState()
   x_ = transform_.translation();
   rotation_ = transform_.rotation();
   x_dot_ = j_ * qdot_;
+
+  x_rbdl_ = mpc_->robot_->getEEPosition(q_);
+  rotation_rbdl_ = mpc_->robot_->getEEOrientation(q_);
+  j_rbdl_ = mpc_->robot_->getJacobian(q_);
+
+  double x_error = (x_rbdl_ - x_).norm();
+  double rot_error = (rotation_ - rotation_rbdl_).norm();
+  double j_error = (j_rbdl_ - j_).norm();
+
+
+  // ============== MPCC ==============
+  if(mpcc_thread_enabled_)
+  {
+    s_info_.s += s_info_.vs / hz_;
+    s_info_.vs += s_info_.dVs / hz_;
+  }
+  // ==================================
+
+  input_mutex_.unlock();
 }
 
 void jh_controller::setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired_torque)
@@ -251,7 +315,7 @@ void jh_controller::setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired
 
 void jh_controller::asyncCalculationProc()
   {
-    bench_timer_.reset();
+    // bench_timer_.reset();
     calculation_mutex_.lock();
     if(is_mode_changed_)
     {
@@ -262,21 +326,52 @@ void jh_controller::asyncCalculationProc()
       x_init_ = x_;
       rotation_init_ = rotation_;
       transform_init_ = transform_;
+      qdot_desired_ = qdot_init_;
+      q_desired_ = q_init_;
+      mpcc_thread_enabled_ = false;
+
+      if(control_mode_ == HOME)
+      {
+          std::cout << "================ Mode change: HOME position ===============" <<std::endl;
+      }
+      else if(control_mode_ == MPCC)
+      {
+          std::cout << "================ Mode change: MPCC ================" <<std::endl;
+          s_info_.setZero();
+          mpcc_qdot_desired_.setZero();
+          mpcc_dVs_desired_ = 0;
+
+          mpcc::Track track = mpcc::Track(json_paths_.track_path);
+          mpcc::TrackPos track_xyzr = track.getTrack(x_init_);
+          mpc_->setTrack(track_xyzr.X,track_xyzr.Y,track_xyzr.Z,track_xyzr.R);
+          mpcc_thread_enabled_ = true;
+      }
+
     }
 
     if(control_mode_ == HOME)
     {
       Eigen::Matrix<double, 7, 1> target_q;
       target_q << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
-      target_q << 0.516,  0.447,  0.384, -1.085, -0.143, 1.587,  1.517;
       jh_controller::moveJointPositionTorque(target_q, 5.0);
+    }
+    else if(control_mode_ == MPCC)
+    {
+      if(is_mpcc_solved_)
+      {
+        is_mpcc_solved_ = false;
+        qdot_desired_ = mpcc_qdot_desired_;
+        s_info_.dVs = mpcc_dVs_desired_;
+      }
+      q_desired_ += qdot_desired_/hz_;
+      torque_desired_ = PDControl(q_desired_, qdot_desired_);
     }
     else
     {
       torque_desired_ = c_;
     }
     calculation_mutex_.unlock();
-    double elapsed_time = bench_timer_.elapsedAndReset();
+    // double elapsed_time = bench_timer_.elapsedAndReset();
     // std::cout << "elapsed_time: " << elapsed_time*1000.0 << std::endl;
   }
 
@@ -293,6 +388,9 @@ void jh_controller::modeChangeReaderProc()
           case 'h':
             jh_controller::setMode(HOME);
             break;
+          case 'm':
+            jh_controller::setMode(MPCC);
+            break;
           default:
             jh_controller::setMode(NONE);
             break;
@@ -300,6 +398,53 @@ void jh_controller::modeChangeReaderProc()
         calculation_mutex_.unlock();
       }
       
+    }
+}
+
+void jh_controller::asyncMPCCFProc()
+{
+  // TODO: use Ts_mpcc_
+  std::chrono::milliseconds interval(10);
+    while(!quit_all_proc_)
+    {
+        if(mpcc_thread_enabled_)
+        {
+          auto start = std::chrono::high_resolution_clock::now();
+
+          mpcc_input_mutex_.lock();
+          mpcc::State x0;
+          mpcc::StateVector x0_vec;
+          // x0_vec << q_, s_info_.s, s_info_.vs;
+          x0_vec << q_desired_, s_info_.s, s_info_.vs;
+          x0 = mpcc::vectorToState(x0_vec);
+
+          mpcc_input_mutex_.unlock();
+          mpcc::MPCReturn mpc_sol = mpc_->runMPC(x0);
+
+          // std::cout << "computation time :" <<std::endl;
+          // std::cout << "\t total      :" << mpc_sol.compute_time.total <<std::endl;
+          // std::cout << "\t set qp     :" << mpc_sol.compute_time.set_qp <<std::endl;
+          // std::cout << "\t solve qp   :" << mpc_sol.compute_time.solve_qp <<std::endl;
+          // std::cout << "\t linesearch :" << mpc_sol.compute_time.get_alpha <<std::endl;
+          // std::cout << "sol: " << mpcc::inputToVector(mpc_sol.u0).transpose() << std::endl; 
+
+          mpcc_mutex_.lock();
+          s_info_.s = x0.s;
+          mpcc_qdot_desired_ = mpcc::inputToJointVector(mpc_sol.u0);
+          mpcc_dVs_desired_ = mpc_sol.u0.dVs;
+          is_mpcc_solved_ = true;            
+          mpcc_mutex_.unlock();
+
+          auto end = std::chrono::high_resolution_clock::now();
+          std::chrono::duration<double, std::milli> elapsed = end - start;
+          auto sleep_time = interval - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+          if(sleep_time.count() > 0) std::this_thread::sleep_for(sleep_time);
+        }
+        // TODO: erase 'else' part
+        else
+        {
+          if(mpcc_trigger_()) int temp=0;
+        }
     }
 }
 // ------------------------------------------------------------------------------------------------
