@@ -42,6 +42,22 @@ int kbhit(void)
 	return 0;
 }
 
+void rotationMatrixToQuaternion(const Eigen::Matrix<double, 3, 3>& rotation_matrix, geometry_msgs::Pose& pose_msg) {
+    // Convert the Eigen rotation matrix to a tf2::Matrix3x3
+    tf2::Matrix3x3 tf2_matrix(
+        rotation_matrix(0, 0), rotation_matrix(0, 1), rotation_matrix(0, 2),
+        rotation_matrix(1, 0), rotation_matrix(1, 1), rotation_matrix(1, 2),
+        rotation_matrix(2, 0), rotation_matrix(2, 1), rotation_matrix(2, 2)
+    );
+
+    // Convert the tf2::Matrix3x3 to a tf2::Quaternion
+    tf2::Quaternion tf2_quaternion;
+    tf2_matrix.getRotation(tf2_quaternion);
+
+    // Convert the tf2::Quaternion to a geometry_msgs::Quaternion
+    tf2::convert(tf2_quaternion, pose_msg.orientation);
+}
+
 namespace advanced_robotics_franka_controllers
 {
 // ---------------------------default controller function-----------------------------------------
@@ -129,6 +145,9 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   mpc_ = std::make_unique<mpcc::MPC>(jsonConfig["Ts"],json_paths_);
   mpcc_trigger_ = franka_hw::TriggerRate(hz_mpcc_);
   integrator_ = make_unique<mpcc::Integrator>(Ts_mpcc_, json_paths_);
+
+  mpcc_global_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/global_path", 1);
+  mpcc_local_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/local_path", 1);
   // ==================================
 
   return true;
@@ -182,6 +201,12 @@ void jh_controller::update(const ros::Time& time, const ros::Duration& period)
     jh_controller::printState();
     play_time_ = time;
     jh_controller::setDesiredTorque(torque_desired_);
+
+    // if(mpcc_thread_enabled_)
+    // {
+    //   mpcc_global_path_pub_.publish(mpcc_global_path_);
+    //   mpcc_local_path_pub_.publish(mpcc_local_path_);
+    // }
 }
 
 void jh_controller::stopping(const ros::Time & /*time*/)
@@ -286,15 +311,6 @@ void jh_controller::getCurrentState()
   rotation_ = transform_.rotation();
   x_dot_ = j_ * qdot_;
 
-  x_rbdl_ = mpc_->robot_->getEEPosition(q_);
-  rotation_rbdl_ = mpc_->robot_->getEEOrientation(q_);
-  j_rbdl_ = mpc_->robot_->getJacobian(q_);
-
-  double x_error = (x_rbdl_ - x_).norm();
-  double rot_error = (rotation_ - rotation_rbdl_).norm();
-  double j_error = (j_rbdl_ - j_).norm();
-
-
   // ============== MPCC ==============
   if(mpcc_thread_enabled_)
   {
@@ -345,6 +361,21 @@ void jh_controller::asyncCalculationProc()
           mpcc::TrackPos track_xyzr = track.getTrack(x_init_);
           mpc_->setTrack(track_xyzr.X,track_xyzr.Y,track_xyzr.Z,track_xyzr.R);
           mpcc_thread_enabled_ = true;
+
+          mpcc_global_path_.header.frame_id = "panda_link0";
+          mpcc_global_path_.poses.clear();
+          for(size_t i=0; i<track_xyzr.X.size(); i++)
+          {
+            geometry_msgs::PoseStamped pose;
+            pose.pose.position.x = track_xyzr.X(i);
+            pose.pose.position.y = track_xyzr.Y(i);
+            pose.pose.position.z = track_xyzr.Z(i);
+            rotationMatrixToQuaternion(track_xyzr.R[i], pose.pose);
+            pose.header.frame_id = "panda_link0";
+
+            mpcc_global_path_.poses.push_back(pose);
+          }
+          mpcc_global_path_pub_.publish(mpcc_global_path_);
       }
 
     }
@@ -434,6 +465,26 @@ void jh_controller::asyncMPCCFProc()
           mpcc_dVs_desired_ = mpc_sol.u0.dVs;
           is_mpcc_solved_ = true;            
           mpcc_mutex_.unlock();
+
+          mpcc_local_path_.header.frame_id = "panda_link0";
+          mpcc_local_path_.poses.clear();
+          for(size_t i=0; i<mpc_sol.mpc_horizon.size(); i++)
+          {
+            Eigen::Matrix<double, 3, 1> xk;
+            Eigen::Matrix<double, 3, 3> rk;
+            xk = mpc_->robot_->getEEPosition(mpcc::stateToJointVector(mpc_sol.mpc_horizon[i].xk));
+            rk = mpc_->robot_->getEEOrientation(mpcc::stateToJointVector(mpc_sol.mpc_horizon[i].xk));
+
+            geometry_msgs::PoseStamped pose;
+            pose.pose.position.x = xk(0);
+            pose.pose.position.y = xk(1);
+            pose.pose.position.z = xk(2);
+            rotationMatrixToQuaternion(rk, pose.pose);
+            pose.header.frame_id = "panda_link0";
+
+            mpcc_local_path_.poses.push_back(pose);
+          }
+          mpcc_local_path_pub_.publish(mpcc_local_path_);
 
           auto end = std::chrono::high_resolution_clock::now();
           std::chrono::duration<double, std::milli> elapsed = end - start;

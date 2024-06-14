@@ -35,6 +35,10 @@
 #include "MPC/mpc.h"
 #include "Params/track.h"
 
+#include <nav_msgs/Path.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 // ==================================
 
 namespace advanced_robotics_franka_controllers {
@@ -79,10 +83,6 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 	Eigen::Matrix<double, 3, 1> phi_;
 	Eigen::Matrix<double, 6, 1> x_dot_;   // 6D (linear + angular)
 	Eigen::Matrix<double, 6, 1> x_error_;
-
-	Eigen::Matrix<double, 3, 1> x_rbdl_;
-	Eigen::Matrix<double, 3, 3> rotation_rbdl_;
-	Eigen::Matrix<double, 6, 7> j_rbdl_;
 
   // dynamics
   Eigen::Matrix<double, 7, 1> g_; // gravity matrix
@@ -139,9 +139,9 @@ class jh_controller : public controller_interface::MultiInterfaceController<
     void setZero(){s=0; vs=0; dVs=0;}
   };
 
+  std::unique_ptr<mpcc::Integrator> integrator_;
   std::unique_ptr<mpcc::MPC> mpc_;
   mpcc::PathToJson json_paths_;
-  // std::unique_ptr<franka_hw::TriggerRate> mpcc_trigger_;
   franka_hw::TriggerRate mpcc_trigger_;
 
   double Ts_mpcc_;
@@ -158,9 +158,11 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 
   void asyncMPCCFProc();
 
-  // mpcc::State x0;
-  // bool is_first_mpcc = true;
-  std::unique_ptr<mpcc::Integrator> integrator_;
+  ros::Publisher mpcc_global_path_pub_;
+  ros::Publisher mpcc_local_path_pub_;
+
+  nav_msgs::Path mpcc_global_path_;
+  nav_msgs::Path mpcc_local_path_;
   // ==================================
 };
 
