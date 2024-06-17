@@ -67,6 +67,7 @@ public:
 
 
     std::unique_ptr<RobotModel> robot_;
+    ArcLengthSpline track_;
 
 private:
     /// @brief unwrapping for initial variables which have phi(yaw) and arc length(s) 
@@ -84,7 +85,6 @@ private:
     std::array<OptVariables, N + 1> initial_guess_;
     const double Ts_;
     Integrator integrator_;
-    ArcLengthSpline track_;
     Param param_;
     std::unique_ptr<SolverInterface> solver_interface_;
 };

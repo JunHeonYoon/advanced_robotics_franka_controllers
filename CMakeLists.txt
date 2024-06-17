@@ -25,6 +25,7 @@ find_package(catkin REQUIRED COMPONENTS
   franka_gripper
   geometry_msgs
   nav_msgs
+  sensor_msgs
   hardware_interface
   pluginlib
   realtime_tools

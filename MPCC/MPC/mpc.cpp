@@ -95,6 +95,7 @@ void MPC::setTrack(const Eigen::VectorXd &X, const Eigen::VectorXd &Y,const Eige
 {
     track_.gen6DSpline(X,Y,Z,R);
     solver_interface_->setTrack(track_);
+    valid_initial_guess_ = false;
 }
 
 }

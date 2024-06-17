@@ -42,7 +42,8 @@ int kbhit(void)
 	return 0;
 }
 
-void rotationMatrixToQuaternion(const Eigen::Matrix<double, 3, 3>& rotation_matrix, geometry_msgs::Pose& pose_msg) {
+void rotationMatrixToQuaternion(const Eigen::Matrix<double, 3, 3>& rotation_matrix, geometry_msgs::Pose& pose_msg) 
+{
     // Convert the Eigen rotation matrix to a tf2::Matrix3x3
     tf2::Matrix3x3 tf2_matrix(
         rotation_matrix(0, 0), rotation_matrix(0, 1), rotation_matrix(0, 2),
@@ -56,6 +57,18 @@ void rotationMatrixToQuaternion(const Eigen::Matrix<double, 3, 3>& rotation_matr
 
     // Convert the tf2::Quaternion to a geometry_msgs::Quaternion
     tf2::convert(tf2_quaternion, pose_msg.orientation);
+}
+
+void rotationMatrixToRPY(const Eigen::Matrix<double, 3, 3>& rotation_matrix, Eigen::Matrix<double, 3, 1>& rpy)
+{
+  // Convert the Eigen rotation matrix to a tf2::Matrix3x3
+    tf2::Matrix3x3 tf2_matrix(
+        rotation_matrix(0, 0), rotation_matrix(0, 1), rotation_matrix(0, 2),
+        rotation_matrix(1, 0), rotation_matrix(1, 1), rotation_matrix(1, 2),
+        rotation_matrix(2, 0), rotation_matrix(2, 1), rotation_matrix(2, 2)
+    );
+
+  tf2_matrix.getRPY(rpy(0), rpy(1), rpy(2));
 }
 
 namespace advanced_robotics_franka_controllers
@@ -148,6 +161,8 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
 
   mpcc_global_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/global_path", 1);
   mpcc_local_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/local_path", 1);
+  mpcc_ref_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/ref_path", 1);
+  ee_pose_pub_ = node_handle.advertise<sensor_msgs::JointState>("/ee_planner/joint_states", 1);
   // ==================================
 
   return true;
@@ -174,12 +189,26 @@ void jh_controller::starting(const ros::Time& time) {
   rotation_init_ = rotation_;
 
   s_info_.setZero();
+
+  Kp_diag_ << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
+  Kv_diag_ << 50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0;
 }
 
 void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
 {
 
     jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
+    if(wrench_.block(0,0,3,1).norm() > contact_thres && !is_contacted_)
+    {
+      is_contacted_ = true;
+      is_contacted_changed_ = true;
+    }
+    else if(wrench_.block(0,0,3,1).norm() < contact_thres && is_contacted_)
+    {
+      is_contacted_ = false;
+      is_contacted_changed_ = true;
+    }
+      
     if(calculation_mutex_.try_lock())
     {
         calculation_mutex_.unlock();
@@ -201,12 +230,6 @@ void jh_controller::update(const ros::Time& time, const ros::Duration& period)
     jh_controller::printState();
     play_time_ = time;
     jh_controller::setDesiredTorque(torque_desired_);
-
-    // if(mpcc_thread_enabled_)
-    // {
-    //   mpcc_global_path_pub_.publish(mpcc_global_path_);
-    //   mpcc_local_path_pub_.publish(mpcc_local_path_);
-    // }
 }
 
 void jh_controller::stopping(const ros::Time & /*time*/)
@@ -222,6 +245,9 @@ void jh_controller::printState()
     {
     std::cout << "-------------------------------------------------------------------" << std::endl;
     std::cout << "MODE     : " << control_mode_ << std::endl;
+    std::cout << "Compliant: ";
+    if(is_contacted_) std::cout << "True "<< std::endl;
+    else std::cout << "False"<< std::endl;
     std::cout << "time     : " << std::fixed << std::setprecision(5) << play_time_.toSec() << std::endl;
 		std::cout << "q now    :\t";
 		std::cout << std::fixed << std::setprecision(5) << q_.transpose() << std::endl;
@@ -244,8 +270,10 @@ void jh_controller::printState()
       std::cout << "dVs      :\t";
 		  std::cout << s_info_.dVs << std::endl;
     }
-    std::cout << "torque desired    :\t";
+    std::cout << "tau desired:\t";
 		std::cout << std::fixed << std::setprecision(5) << torque_desired_.transpose() << std::endl;
+    std::cout << "wrench   : " << wrench_.block(0,0,3,1).norm()<< "//\t";
+		std::cout << std::fixed << std::setprecision(5) << wrench_.transpose() << std::endl;
 
     std::cout << "-------------------------------------------------------------------\n\n" << std::endl;
   }
@@ -253,16 +281,31 @@ void jh_controller::printState()
 
 Eigen::Matrix<double, 7, 1> jh_controller::PDControl(const Eigen::Matrix<double, 7, 1> & q_desired, const Eigen::Matrix<double, 7, 1> & qdot_desired)
 {
-  Eigen::Vector7d Kp_diag, Kv_diag;
-  Kp_diag << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
-  Kv_diag << 50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0;
+  if(is_contacted_changed_)
+  {
+    is_contacted_changed_ = false;
+    contact_time_ = play_time_;
+    Kp_diag_init_ = Kp_diag_;
+    Kv_diag_init_ = Kv_diag_;
+  }
+  Eigen::Matrix<double,7,1> Kp_diag_target, Kv_diag_target;
+  Kp_diag_target << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
+  Kv_diag_target << 50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0;
+  if(is_contacted_)
+  {
+    Kp_diag_target*=0.05;
+    Kv_diag_target*=0.05;
+  }
+  for(size_t i=0; i<7;i++)
+  {
+    Kp_diag_(i) = DyrosMath::cubic(play_time_.toSec(), contact_time_.toSec(), contact_time_.toSec() + 1.0,
+                                        Kp_diag_init_(i), Kp_diag_target(i), 0, 0);
+    Kv_diag_(i) = DyrosMath::cubic(play_time_.toSec(), contact_time_.toSec(), contact_time_.toSec() + 1.0,
+                                        Kv_diag_init_(i), Kv_diag_target(i), 0, 0);
+  }
 
-  // double kp, kv;
-  // kp = 1600;
-  // kv = 10;
 
-  // return m_ * ( kp*(q_desired - q_) + kv*(qdot_desired - qdot_)) + c_;
-  return m_ * ( Kp_diag.asDiagonal()*(q_desired - q_) + Kv_diag.asDiagonal()*(qdot_desired - qdot_)) + c_;
+  return m_ * ( Kp_diag_.asDiagonal()*(q_desired - q_) + Kv_diag_.asDiagonal()*(qdot_desired - qdot_)) + c_;
 }
 
 void jh_controller::moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> &target_q, double duration)
@@ -294,11 +337,11 @@ void jh_controller::getCurrentState()
   const std::array<double, 7> &gravity_array = model_handle_->getGravity();
   const std::array<double, 49> &massmatrix_array = model_handle_->getMass();
   const std::array<double, 7> &coriolis_array = model_handle_->getCoriolis();
-
-  input_mutex_.lock();
+ 
   q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
   qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
   torque_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
+  wrench_ = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(robot_state.O_F_ext_hat_K.data());
   g_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(gravity_array.data());
   m_ = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(massmatrix_array.data());
   m_inv_ = m_.inverse();
@@ -320,6 +363,36 @@ void jh_controller::getCurrentState()
   // ==================================
 
   input_mutex_.unlock();
+
+  sensor_msgs::JointState ee_pose;
+  // ee_pose.header.frame_id="";
+  ee_pose.header.stamp = ros::Time::now();
+  
+  Eigen::Matrix<double,3,1> rpy;
+  rotationMatrixToRPY(rotation_, rpy);
+
+  ee_pose.position.resize(8);
+  ee_pose.position[0] = x_(0);
+  ee_pose.position[1] = x_(1);
+  ee_pose.position[2] = x_(2);
+  ee_pose.position[3] = rpy(0);
+  ee_pose.position[4] = rpy(1);
+  ee_pose.position[5] = rpy(2);
+  ee_pose.position[6] = 0;
+  ee_pose.position[7] = 0;
+
+  ee_pose.name.resize(8);
+  ee_pose.name[0] = "virtual_joint_x";
+  ee_pose.name[1] = "virtual_joint_y";
+  ee_pose.name[2] = "virtual_joint_z";
+  ee_pose.name[3] = "virtual_joint_R";
+  ee_pose.name[4] = "virtual_joint_P";
+  ee_pose.name[5] = "virtual_joint_Y";
+  ee_pose.name[6] = "panda_finger_joint1";
+  ee_pose.name[7] = "panda_finger_joint2";
+
+
+  ee_pose_pub_.publish(ee_pose);
 }
 
 void jh_controller::setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired_torque)
@@ -362,8 +435,8 @@ void jh_controller::asyncCalculationProc()
           mpc_->setTrack(track_xyzr.X,track_xyzr.Y,track_xyzr.Z,track_xyzr.R);
           mpcc_thread_enabled_ = true;
 
-          mpcc_global_path_.header.frame_id = "panda_link0";
-          mpcc_global_path_.poses.clear();
+          nav_msgs::Path mpcc_global_path;
+          mpcc_global_path.header.frame_id = "panda_link0";
           for(size_t i=0; i<track_xyzr.X.size(); i++)
           {
             geometry_msgs::PoseStamped pose;
@@ -373,9 +446,9 @@ void jh_controller::asyncCalculationProc()
             rotationMatrixToQuaternion(track_xyzr.R[i], pose.pose);
             pose.header.frame_id = "panda_link0";
 
-            mpcc_global_path_.poses.push_back(pose);
+            mpcc_global_path.poses.push_back(pose);
           }
-          mpcc_global_path_pub_.publish(mpcc_global_path_);
+          mpcc_global_path_pub_.publish(mpcc_global_path);
       }
 
     }
@@ -445,8 +518,8 @@ void jh_controller::asyncMPCCFProc()
           mpcc_input_mutex_.lock();
           mpcc::State x0;
           mpcc::StateVector x0_vec;
-          // x0_vec << q_, s_info_.s, s_info_.vs;
-          x0_vec << q_desired_, s_info_.s, s_info_.vs;
+          x0_vec << q_, s_info_.s, s_info_.vs;
+          // x0_vec << q_desired_, s_info_.s, s_info_.vs;
           x0 = mpcc::vectorToState(x0_vec);
 
           mpcc_input_mutex_.unlock();
@@ -466,8 +539,10 @@ void jh_controller::asyncMPCCFProc()
           is_mpcc_solved_ = true;            
           mpcc_mutex_.unlock();
 
-          mpcc_local_path_.header.frame_id = "panda_link0";
-          mpcc_local_path_.poses.clear();
+
+          // publish optimal trajectory from MPCC
+          nav_msgs::Path mpcc_local_path;
+          mpcc_local_path.header.frame_id = "panda_link0";
           for(size_t i=0; i<mpc_sol.mpc_horizon.size(); i++)
           {
             Eigen::Matrix<double, 3, 1> xk;
@@ -482,9 +557,32 @@ void jh_controller::asyncMPCCFProc()
             rotationMatrixToQuaternion(rk, pose.pose);
             pose.header.frame_id = "panda_link0";
 
-            mpcc_local_path_.poses.push_back(pose);
+            mpcc_local_path.poses.push_back(pose);
           }
-          mpcc_local_path_pub_.publish(mpcc_local_path_);
+          mpcc_local_path_pub_.publish(mpcc_local_path);
+
+
+          // publish optimal refernce path from MPCC
+          nav_msgs::Path mpcc_ref_path;
+          mpcc_ref_path.header.frame_id = "panda_link0";
+          for(size_t i=0; i<mpc_sol.mpc_horizon.size(); i++)
+          {
+            Eigen::Matrix<double, 3, 1> xk;
+            Eigen::Matrix<double, 3, 3> rk;
+            xk = mpc_->track_.getPostion(mpc_sol.mpc_horizon[i].xk.s);
+            rk = mpc_->track_.getOrientation(mpc_sol.mpc_horizon[i].xk.s);
+
+            geometry_msgs::PoseStamped pose;
+            pose.pose.position.x = xk(0);
+            pose.pose.position.y = xk(1);
+            pose.pose.position.z = xk(2);
+            rotationMatrixToQuaternion(rk, pose.pose);
+            pose.header.frame_id = "panda_link0";
+
+            mpcc_ref_path.poses.push_back(pose);
+          }
+          mpcc_ref_path_pub_.publish(mpcc_ref_path);
+
 
           auto end = std::chrono::high_resolution_clock::now();
           std::chrono::duration<double, std::milli> elapsed = end - start;

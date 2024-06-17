@@ -39,6 +39,8 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+
+#include <sensor_msgs/JointState.h>
 // ==================================
 
 namespace advanced_robotics_franka_controllers {
@@ -83,6 +85,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 	Eigen::Matrix<double, 3, 1> phi_;
 	Eigen::Matrix<double, 6, 1> x_dot_;   // 6D (linear + angular)
 	Eigen::Matrix<double, 6, 1> x_error_;
+	Eigen::Matrix<double, 6, 1> wrench_;
+
 
   // dynamics
   Eigen::Matrix<double, 7, 1> g_; // gravity matrix
@@ -160,9 +164,16 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 
   ros::Publisher mpcc_global_path_pub_;
   ros::Publisher mpcc_local_path_pub_;
+  ros::Publisher mpcc_ref_path_pub_;
+  ros::Publisher ee_pose_pub_;
+  
 
-  nav_msgs::Path mpcc_global_path_;
-  nav_msgs::Path mpcc_local_path_;
+  bool is_contacted_{false};
+  bool is_contacted_changed_{false};
+  ros::Time contact_time_;
+  Eigen::Matrix<double,7,1> Kp_diag_, Kv_diag_;
+  Eigen::Matrix<double,7,1> Kp_diag_init_, Kv_diag_init_;
+  double contact_thres{6.5};
   // ==================================
 };
 
