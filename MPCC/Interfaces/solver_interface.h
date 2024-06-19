@@ -28,7 +28,8 @@ struct ComputeTime;
 enum Status
 { 
     SOLVED,    
-    MAX_ITER_EXCEEDED, 
+    MAX_ITER_EXCEEDED,
+    QP_INFISIBLE, 
     INVALID_SETTINGS 
 };
 

@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <launch>
-  <arg name="robot_ip" default="172.16.3.3" />
+  <!-- <arg name="robot_ip" default="172.16.3.3" />
   <arg name="load_gripper" default="true" />
   <include file="$(find franka_control)/launch/franka_control.launch" >
     <arg name="robot_ip" value="$(arg robot_ip)" />
@@ -9,5 +9,43 @@
 
   <rosparam command="load" file="$(find advanced_robotics_franka_controllers)/config/advanced_robotics_franka_controllers.yaml" />
   <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen"  args="jh_controller"/>
-  <node pkg="rviz" type="rviz" output="screen" name="rviz" args="-d $(find advanced_robotics_franka_controllers)/launch/robot.rviz"/>
+  <node pkg="rviz" type="rviz" output="screen" name="rviz" args="-d $(find advanced_robotics_franka_controllers)/launch/robot.rviz"/> -->
+
+  <arg name="load_gripper" default="true" />
+  <arg name="robot_id" default="panda"/>
+  <arg name="arm_id" default="$(arg robot_id)"/>
+  <arg name="robot" default="$(find franka_description)/robots/panda/panda.urdf.xacro hand:=$(arg load_gripper) arm_id:=$(arg arm_id)"/>
+  <arg name="rviz" default="true"/>
+  <arg name="robot_ip" default="172.16.3.3"/>
+  <arg name="robot_ips" default="{panda/robot_ip: $(arg robot_ip)}"/>
+
+  <arg name="hw_config_file" default="$(find advanced_robotics_franka_controllers)/config/franka_combined_control_single_node.yaml"/>
+  <arg name="controllers_file" default="$(find advanced_robotics_franka_controllers)/config/default_combined_controllers_single.yaml"/>
+
+  <arg name="controllers_to_start" default="panda_state_controller"/>
+  <arg name="joint_states_source_list" default="[panda_state_controller/joint_states]"/>
+
+  <include file="$(find franka_control)/launch/franka_combined_control.launch">
+    <arg name="robot" value="$(arg robot)"/>
+    <arg name="robot_id" value="$(arg robot_id)"/>
+    <arg name="robot_ips" value="$(arg robot_ips)"/>
+    <arg name="hw_config_file" value="$(arg hw_config_file)"/>
+    <arg name="controllers_file" value="$(arg controllers_file)"/>
+    <arg name="controllers_to_start" value="$(arg controllers_to_start)"/>
+    <arg name="joint_states_source_list" value="$(arg joint_states_source_list)"/>
+  </include>
+
+  <include file="$(find franka_gripper)/launch/franka_gripper.launch" if="$(arg load_gripper)">
+    <arg name="robot_ip" value="$(arg robot_ip)" />
+    <arg name="arm_id"   value="$(arg arm_id)" />
+  </include>
+  
+  <group ns="$(arg robot_id)">
+    <rosparam command="load" file="$(find advanced_robotics_franka_controllers)/config/advanced_robotics_franka_controllers.yaml" />
+    <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen"  args="jh_controller"/>
+  </group>
+
+  <param name="robot_description" command="$(find xacro)/xacro $(arg robot)"/>
+  <node pkg="rviz" type="rviz" output="screen" if="$(arg rviz)" name="rviz" args="-d $(find advanced_robotics_franka_controllers)/launch/robot.rviz"/>
+
 </launch>

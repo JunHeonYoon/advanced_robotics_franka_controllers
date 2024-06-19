@@ -55,7 +55,7 @@ public:
 
     /// @brief run MPC by sqp given current state
     /// @param x0 (State) current state
-    /// @return (MPCReturn) log for MPC: optimal control input, total horizon results, time to run MPC
+    /// @return (MPCReturn) log for MPC; optimal control input, total horizon results, time to run MPC
     MPCReturn runMPC(State &x0);
 
     /// @brief set track given X-Y-Z-R path data

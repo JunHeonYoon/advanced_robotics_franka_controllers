@@ -28,124 +28,25 @@ Model::Model(double Ts,const PathToJson &path)
 {
 }
 
-// double Model::getSlipAngleFront(const State &x) const
-// {
-//     return -std::atan2(x.vy+x.r*param_.lf,x.vx) + x.delta;
-// }
-
-// double Model::getSlipAngleRear(const State &x) const
-// {
-//     return -std::atan2(x.vy-x.r*param_.lr,x.vx);
-// }
-
-// TireForces Model::getForceFront(const State &x) const
-// {
-//     const double alpha_f = getSlipAngleFront(x);
-//     const double F_y = param_.Df * std::sin(param_.Cf * std::atan(param_.Bf * alpha_f ));
-//     const double F_x = 0.0;
-
-//     return {F_y,F_x};
-// }
-
-// TireForces Model::getForceRear(const State &x) const
-// {
-//     const double alpha_r = getSlipAngleRear(x);
-//     const double F_y = param_.Dr * std::sin(param_.Cr * std::atan(param_.Br * alpha_r ));
-//     const double F_x = param_.Cm1*x.D - param_.Cm2*x.D*x.vx;// - param_.Cr0 - param_.Cr2*std::pow(x.vx,2.0);
-
-//     return {F_y,F_x};
-// }
-
-// double Model::getForceFriction(const State &x) const
-// {
-//     return -param_.Cr0 - param_.Cr2*std::pow(x.vx,2.0);
-// }
-
-// NormalForces Model::getForceNormal(const State &x) const
-// {
-//     // at this point aero forces could be modeled
-//     const double f_n_front = param_.lr/(param_.lf + param_.lr)*param_.m*param_.g;
-//     const double f_n_rear = param_.lf/(param_.lf + param_.lr)*param_.m*param_.g;
-//     return {f_n_front,f_n_rear};
-// }
-
-// TireForcesDerivatives Model::getForceFrontDerivatives(const State &x) const
-// {
-//     const double alpha_f = getSlipAngleFront(x);
-//     const double vx = x.vx;
-//     const double vy = x.vy;
-//     const double r  = x.r;
-
-//     // F_fx
-//     const double dF_x_vx    = 0.0;
-//     const double dF_x_vy    = 0.0;
-//     const double dF_x_r     = 0.0;
-//     const double dF_x_D     = 0.0;
-//     const double dF_x_delta = 0.0;
-//     // F_fy
-//     const double dF_y_vx    = (param_.Bf*param_.Cf*param_.Df*std::cos(param_.Cf*std::atan(param_.Bf*alpha_f)))
-//                                             /(1.+std::pow(param_.Bf,2)*std::pow(alpha_f,2))*((param_.lf*r + vy)
-//                                             /(std::pow((param_.lf*r + vy),2)+std::pow(vx,2)));
-//     const double dF_y_vy    = (param_.Bf*param_.Cf*param_.Df*std::cos(param_.Cf*std::atan(param_.Bf*alpha_f)))
-//                                             /(1.+std::pow(param_.Bf,2)*std::pow(alpha_f,2))
-//                                             *(-vx/(std::pow((param_.lf*r + vy),2)+std::pow(vx,2)));
-//     const double dF_y_r     =  (param_.Bf*param_.Cf*param_.Df*std::cos(param_.Cf*std::atan(param_.Bf*alpha_f)))
-//                                             /(1.+std::pow(param_.Bf,2)*std::pow(alpha_f,2))*((-param_.lf*vx)
-//                                             /(std::pow((param_.lf*r + vy),2)+std::pow(vx,2)));
-//     const double dF_y_D     =  0.0;
-//     const double dF_y_delta = (param_.Bf*param_.Cf*param_.Df*std::cos(param_.Cf*std::atan(param_.Bf*alpha_f)))
-//                                             /(1.+std::pow(param_.Bf,2)*std::pow(alpha_f,2));
-
-//     return {dF_y_vx,dF_y_vy,dF_y_r,dF_y_D,dF_y_delta,dF_x_vx,dF_x_vy,dF_x_r,dF_x_D,dF_x_delta};
-// }
-
-// TireForcesDerivatives Model::getForceRearDerivatives(const State &x) const
-// {
-//     const double alpha_r = getSlipAngleRear(x);
-//     const double vx = x.vx;
-//     const double vy = x.vy;
-//     const double r  = x.r;
-//     const double D  = x.D;
-
-//     //F_rx
-//     const double dF_x_vx    = -param_.Cm2*D;// - 2.0*param_.Cr2*vx;
-//     const double dF_x_vy    = 0.0;
-//     const double dF_x_r     = 0.0;
-//     const double dF_x_D     = param_.Cm1 - param_.Cm2*vx;
-//     const double dF_x_delta = 0.0;
-//     // F_ry
-//     const double dF_y_vx    = ((param_.Br*param_.Cr*param_.Dr*std::cos(param_.Cr*std::atan(param_.Br*alpha_r)))
-//                                             /(1.+std::pow(param_.Br,2)*std::pow(alpha_r,2)))*(-(param_.lr*r - vy)
-//                                             /(std::pow((-param_.lr*r + vy),2)+std::pow(vx,2)));
-//     const double dF_y_vy    = ((param_.Br*param_.Cr*param_.Dr*std::cos(param_.Cr*std::atan(param_.Br*alpha_r)))
-//                                             /(1.+std::pow(param_.Br,2)*std::pow(alpha_r,2)))
-//                                             *((-vx)/(std::pow((-param_.lr*r + vy),2)+std::pow(vx,2)));
-//     const double dF_y_r     = ((param_.Br*param_.Cr*param_.Dr*std::cos(param_.Cr*std::atan(param_.Br*alpha_r)))
-//                                             /(1.+std::pow(param_.Br,2)*std::pow(alpha_r,2)))*((param_.lr*vx)
-//                                             /(std::pow((-param_.lr*r + vy),2)+std::pow(vx,2)));
-//     const double dF_y_D     = 0.0;
-//     const double dF_y_delta = 0.0;
-
-//     return {dF_y_vx,dF_y_vy,dF_y_r,dF_y_D,dF_y_delta,dF_x_vx,dF_x_vy,dF_x_r,dF_x_D,dF_x_delta};
-// }
-
-// FrictionForceDerivatives Model::getForceFrictionDerivatives(const State &x) const
-// {
-//     return {-2.0*param_.Cr2*x.vx,0.0,0.0,0.0,0.0};
-// }
-
 StateVector Model::getF(const State &x,const Input &u) const
 {
     StateVector f;
-    f(0) = u.dq1;
-    f(1) = u.dq2;
-    f(2) = u.dq3;
-    f(3) = u.dq4;
-    f(4) = u.dq5;
-    f(5) = u.dq6;
-    f(6) = u.dq7;
-    f(7) = x.vs;
-    f(8) = u.dVs;
+    f(0) = x.dq1;
+    f(1) = x.dq2;
+    f(2) = x.dq3;
+    f(3) = x.dq4;
+    f(4) = x.dq5;
+    f(5) = x.dq6;
+    f(6) = x.dq7;
+    f(7) = u.ddq1;
+    f(8) = u.ddq2;
+    f(9) = u.ddq3;
+    f(10) = u.ddq4;
+    f(11) = u.ddq5;
+    f(12) = u.ddq6;
+    f(13) = u.ddq7;
+    f(14) = x.vs;
+    f(15) = u.dVs;
 
     return f;
 }
@@ -161,11 +62,12 @@ LinModelMatrix Model::getModelJacobian(const State &x, const Input &u) const
 
     // Jacobians
     // Matrix A
-    A_c(PANDA_DOF,PANDA_DOF+1) = 1.0;
+    A_c.block(0,PANDA_DOF, PANDA_DOF, PANDA_DOF).setIdentity();
+    A_c(2*PANDA_DOF,2*PANDA_DOF+1) = 1.0;
 
     // Matrix B
-    B_c.block(0,0,PANDA_DOF,PANDA_DOF) = Eigen::MatrixXd::Identity(PANDA_DOF,PANDA_DOF);
-    B_c(PANDA_DOF+1,PANDA_DOF) = 1.0;
+    B_c.block(PANDA_DOF,0,PANDA_DOF,PANDA_DOF).setIdentity();
+    B_c(2*PANDA_DOF+1,PANDA_DOF) = 1.0;
 
     return {A_c,B_c,g_c};
 }

@@ -74,7 +74,7 @@ public:
 
     /// @brief get Orientation data given arc length (s)
     /// @param s (double) arc length 
-    /// @return (Eigen::Vector3d) Orientation data
+    /// @return (Eigen::Matrix3d) Orientation data
     Eigen::Matrix3d getOrientation(double) const;
 
     /// @brief get X'(s)-Y'(s)-Z'(s) position data derivatived by arc length (s) given arc length (s)
@@ -101,8 +101,6 @@ public:
     /// @param ee_pos (Eigen::Vector3d) current position of End-Effector
     /// @return (double) projected arc lenth
     double projectOnSpline(const double &s, const Eigen::Vector3d ee_pos) const;
-
-    // void setParam(const Param &param) { param_ = param; };
 
 private:
     /// @brief set irregular path point data to make path data (PathData)
@@ -156,8 +154,7 @@ private:
     /// @return (double) unwrapped arc length (s) data
     double unwrapInput(double x) const;
 
-    PathData path_data_;      // initial data and data used for successive fitting
-//    PathData pathDataFinal; // final data
+    PathData path_data_;
     CubicSpline spline_x_;
     CubicSpline spline_y_;
     CubicSpline spline_z_;

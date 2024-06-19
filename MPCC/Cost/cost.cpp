@@ -68,7 +68,6 @@ ErrorInfo Cost::getErrorInfo(const ArcLengthSpline &track,const State &x,const R
 {
     ErrorInfo error_info;
     // compute error between reference and X-Y-Z position of the robot EE
-    const JointVector q = stateToJointVector(x);
     const Eigen::Vector3d pos = rb.EE_position;
     const TrackPoint track_point = getRefPoint(track,x);
     const Eigen::Vector3d total_error = pos - Eigen::Vector3d(track_point.x_ref,track_point.y_ref, track_point.z_ref);
@@ -83,13 +82,13 @@ ErrorInfo Cost::getErrorInfo(const ArcLengthSpline &track,const State &x,const R
     // jacobian of the total error with respect to state X
     Eigen::Matrix<double,3,NX> d_total_error;
     d_total_error.setZero();
-    d_total_error.block(0,0,3,PANDA_DOF) = rb.Jv;
-    d_total_error.block(0,PANDA_DOF,3,1) = -Tangent;
+    d_total_error.block(0,si_index.q1,3,PANDA_DOF) = rb.Jv;
+    d_total_error.block(0,si_index.s,3,1) = -Tangent;
 
     // jacobian of the lag error with respect to state X
     Eigen::Matrix<double,3,NX> d_Tangent;
     d_Tangent.setZero();
-    d_Tangent.block(0,PANDA_DOF,3,1) = Eigen::Vector3d(track_point.ddx_ref, track_point.ddy_ref, track_point.ddz_ref); // normal vector for ref point
+    d_Tangent.block(0,si_index.s,3,1) = Eigen::Vector3d(track_point.ddx_ref, track_point.ddy_ref, track_point.ddz_ref); // normal vector for ref point
     Eigen::Matrix<double,3,NX> d_lag_error;
     d_lag_error.setZero();
     d_lag_error = (Tangent*Tangent.transpose()) * d_total_error + (Tangent*total_error.transpose() + lag_error.norm()*Eigen::MatrixXd::Identity(3,3)) * d_Tangent;
@@ -105,9 +104,7 @@ ErrorInfo Cost::getErrorInfo(const ArcLengthSpline &track,const State &x,const R
 void Cost::getContouringCost(const ArcLengthSpline &track,const State &x,const RobotData &rb,int k, 
                              double* obj,CostGrad* grad,CostHess* hess)
 {
-    // compute state cost, formed by contouring error cost + cost on "real" inputs
-    // compute reference information
-    const StateVector x_vec = stateToVector(x);
+    // compute state cost, formed by contouring error cost + cost on progress of path parameter
     // compute error and jacobian of error
     const ErrorInfo error_info = getErrorInfo(track,x,rb);
     // contouring cost matrix
@@ -196,59 +193,39 @@ void Cost::getHeadingCost(const ArcLengthSpline &track,const State &x,const Robo
 void Cost::getInputCost(const ArcLengthSpline &track,const State &x,const Input &u,const RobotData &rb,int k, 
                         double* obj,CostGrad* grad,CostHess* hess)
 {
-    if(k == N)
-    {
-        if(obj ) (*obj) = 0.;
-        if(grad) grad->setZero();
-        if(hess) hess->setZero();
-        return;
-    }
-    // compute control input cost, formed by joint velocity, acceleration of path parameter 
-    // and error between EE velocity and desired EE velocity
-    // compute current EE linear velocity
-    const JointVector q = stateToJointVector(x);
-    Matrix<double, 3, PANDA_DOF> Jv = rb.Jv;
-    const JointVector dq = inputToJointVector(u);
-    Matrix<double,3,1> ee_vel = Jv * dq;
-    double s_max = track.getLength();
-    double desired_ee_vel = (x.s < s_max * param_.deacc_ratio) ? param_.desired_ee_velocity : -param_.desired_ee_velocity / (s_max * param_.deacc_ratio) * (x.s - s_max);
-    Matrix<double,3,1> ee_vel_error = ee_vel - desired_ee_vel*track.getDerivative(x.s);
-    if(x.s >= track.getLength()) ee_vel_error = ee_vel;
-    double ee_vel_error_sqnorm = ee_vel_error.squaredNorm();
+    // compute control input cost, formed by joint velocity, joint acceleration, acceleration of path parameter 
+    dJointVector dq = stateTodJointVector(x);
+    ddJointVector ddq = inputToddJointVector(u);
 
     // Exact Input cost
     if(obj)
     {
-        (*obj) = cost_param_.r_dq * dq.squaredNorm() + cost_param_.r_dVs * pow(u.dVs,2) + cost_param_.r_ee * ee_vel_error.squaredNorm();
+        (*obj) = cost_param_.r_dq * dq.squaredNorm();
+        if(k != N) (*obj) += cost_param_.r_ddq * ddq.squaredNorm() + cost_param_.r_dVs * pow(u.dVs,2);
     }
 
-    if(grad || hess)
-    {
-    }
 
     // Gradient of Input cost
     if(grad)
     {
-        double ds_ee_vel_error_sqnorm = -2.0*desired_ee_vel*ee_vel_error.dot(track.getSecondDerivative(x.s));
-        Matrix<double, PANDA_DOF, 1> dq_ee_vel_error_sqnorm = 2.0*Jv.transpose()*ee_vel_error;
         grad->setZero();
-        grad->f_x(si_index.s) = cost_param_.r_ee * ds_ee_vel_error_sqnorm;
-        grad->f_u.segment(si_index.dq1,PANDA_DOF) = cost_param_.r_ee * dq_ee_vel_error_sqnorm;
-        grad->f_u.segment(si_index.dq1,PANDA_DOF) += 2.0 * cost_param_.r_dq * inputToJointVector(u);
-        grad->f_u(si_index.dVs) += 2.0 * cost_param_.r_dVs*u.dVs;
+        grad->f_x.segment(si_index.dq1,PANDA_DOF) = 2.0 * cost_param_.r_dq * dq;
+        if(k != N)
+        {
+            grad->f_u.segment(si_index.ddq1,PANDA_DOF) = 2.0 * cost_param_.r_ddq * ddq;
+            grad->f_u(si_index.dVs) = 2.0 * cost_param_.r_dVs*u.dVs;
+        }
     }
     
     if(hess)
     {
-        double dss_ee_vel_error_sqnorm = 2.0*pow(desired_ee_vel,2)*track.getSecondDerivative(x.s).squaredNorm();
-        Matrix<double, PANDA_DOF, PANDA_DOF> dqq_ee_vel_error_sqnorm = 2.0*Jv.transpose()*Jv;
-        Matrix<double, PANDA_DOF, 1> dqs_ee_vel_error_sqnorm = -2.0*desired_ee_vel*Jv.transpose()*track.getSecondDerivative(x.s);
         hess->setZero();
-        hess->f_xx(si_index.s,si_index.s) = cost_param_.r_ee * dss_ee_vel_error_sqnorm;
-        hess->f_uu.block(si_index.q1,si_index.q1,PANDA_DOF,PANDA_DOF) = cost_param_.r_ee * dqq_ee_vel_error_sqnorm;
-        hess->f_xu.block(si_index.s,si_index.dq1,1,PANDA_DOF) = cost_param_.r_ee * dqs_ee_vel_error_sqnorm.transpose();
-        hess->f_uu.block(si_index.dq1,si_index.dq1,PANDA_DOF,PANDA_DOF) += 2.0 * cost_param_.r_dq * Eigen::MatrixXd::Identity(PANDA_DOF,PANDA_DOF);
-        hess->f_uu(si_index.dVs,si_index.dVs) += 2.0 * cost_param_.r_dVs;
+        hess->f_xx.block(si_index.dq1,si_index.dq1,PANDA_DOF,PANDA_DOF) = 2.0 * cost_param_.r_dq * Eigen::MatrixXd::Identity(PANDA_DOF,PANDA_DOF);
+        if(k != N)
+        {
+            hess->f_uu.block(si_index.ddq1,si_index.ddq1,PANDA_DOF,PANDA_DOF) = 2.0 * cost_param_.r_ddq * Eigen::MatrixXd::Identity(PANDA_DOF,PANDA_DOF);
+            hess->f_uu(si_index.dVs,si_index.dVs) = 2.0 * cost_param_.r_dVs;
+        }
     }
 
     return;

@@ -22,8 +22,7 @@ Constraints::Constraints()
 }
 
 Constraints::Constraints(double Ts,const PathToJson &path) 
-:model_(Ts,path),
-param_(Param(path.param_path))
+:param_(Param(path.param_path))
 {
     Eigen::Vector2d sel_col_n_hidden;
     sel_col_n_hidden << 128, 64;
@@ -52,19 +51,13 @@ double getDRBF(double delta, double h)
     return result;
 }
 
-void Constraints::getSelcollConstraint(const State &x,const Input &u,int k,
+void Constraints::getSelcollConstraint(const State &x,int k,
                                        OneDConstraintInfo *constraint, OneDConstraintsJac* Jac)
 {
-    if(k==N)
-    {
-        if(constraint) constraint->setZero();
-        if(Jac) Jac->setZero();
-        return;
-    }
     // compute self-collision constraints
     // -∇_q Γ(q)^T * q_dot <= -RBF(Γ(q) - r), where r is buffer
     const JointVector q = stateToJointVector(x);
-    const JointVector dq = inputToJointVector(u);
+    const dJointVector dq = stateTodJointVector(x);
 
     // compute minimum distance between each links and its derivative
     auto y_pred = selcolNN_.calculateMlpOutput(q, false); // first: min_dist, second: derivative wrt q
@@ -90,23 +83,17 @@ void Constraints::getSelcollConstraint(const State &x,const Input &u,int k,
 
         Jac->setZero();
         Jac->c_x_i.block(0,si_index.q1,1,PANDA_DOF) = (-dd_min_dist*dq + d_RBF*d_min_dist).transpose();
-        Jac->c_u_i.block(0,si_index.dq1,1,PANDA_DOF) = -d_min_dist.transpose();
+        Jac->c_x_i.block(0,si_index.dq1,1,PANDA_DOF) = -d_min_dist.transpose();
     }
     return;
 }
 
-void Constraints::getSingularConstraint(const State &x,const Input &u,const RobotData &rb,int k,
+void Constraints::getSingularConstraint(const State &x,const RobotData &rb,int k,
                                         OneDConstraintInfo *constraint, OneDConstraintsJac* Jac)
 {
-    if(k==N)
-    {
-        if(constraint) constraint->setZero();
-        if(Jac) Jac->setZero();
-        return;
-    }
     // compute singularity constraints
     // -∇_q μ(q)^T * q_dot <= -RBF(μ(q) - ɛ), where ɛ is buffer
-    const JointVector dq = inputToJointVector(u);
+    const dJointVector dq = stateTodJointVector(x);
 
     //  compute manipulability and its derivative
     double manipulability = rb.manipul; 
@@ -131,7 +118,7 @@ void Constraints::getSingularConstraint(const State &x,const Input &u,const Robo
 
         Jac->setZero();
         Jac->c_x_i.block(0,si_index.q1,1,PANDA_DOF) = (-dd_manipulability*dq + d_RBF*d_manipulability).transpose();
-        Jac->c_u_i.block(0,si_index.dq1,1,PANDA_DOF) = -d_manipulability.transpose();
+        Jac->c_x_i.block(0,si_index.dq1,1,PANDA_DOF) = -d_manipulability.transpose();
     }
     return;
 }
@@ -146,13 +133,13 @@ void Constraints::getConstraints(const State &x,const Input &u,const RobotData &
 
     if(Jac)
     {
-        getSelcollConstraint(x, u, k, &constraint_selcol, &jac_selcol);
-        getSingularConstraint(x, u, rb, k, &constraint_sing, &jac_sing);
+        getSelcollConstraint(x, k, &constraint_selcol, &jac_selcol);
+        getSingularConstraint(x, rb, k, &constraint_sing, &jac_sing);
     }
     else
     {
-        getSelcollConstraint(x, u, k, &constraint_selcol, NULL);
-        getSingularConstraint(x, u, rb, k, &constraint_sing, NULL);
+        getSelcollConstraint(x, k, &constraint_selcol, NULL);
+        getSingularConstraint(x, rb, k, &constraint_sing, NULL);
     }
 
     if(constraint)

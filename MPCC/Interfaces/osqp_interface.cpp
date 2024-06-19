@@ -297,10 +297,32 @@ std::array<OptVariables,N+1> OsqpInterface::solveOCP(Status *status, ComputeTime
         auto start_solve_qp = std::chrono::high_resolution_clock::now();
 
         // solve QP to get step_ and step_lambda_
-        if(!solveQP(Hess_, grad_obj_, jac_constr_, l_-constr_, u_-constr_, step_, step_lambda_)) exit(0);
+        if(!solveQP(Hess_, grad_obj_, jac_constr_, l_-constr_, u_-constr_, step_, step_lambda_))
+        {
+            (*status) = QP_INFISIBLE;
+            std::array<OptVariables,N+1> zero_guess;
+            for(size_t i=0; i<N; i++)
+            {
+                zero_guess[i].xk = initial_guess_[0].xk;
+                zero_guess[i].uk.setZero();
+            }
+            return zero_guess;
+
+        }
         if(sqp_param_.do_SOC)
         {
-            if(!SecondOrderCorrection(initial_guess_,Hess_,grad_obj_,jac_constr_,step_,step_lambda_)) exit(0);
+            if(!SecondOrderCorrection(initial_guess_,Hess_,grad_obj_,jac_constr_,step_,step_lambda_))
+            {
+                (*status) = QP_INFISIBLE;
+                std::array<OptVariables,N+1> zero_guess;
+                for(size_t i=0; i<N; i++)
+                {
+                    zero_guess[i].xk = initial_guess_[0].xk;
+                    zero_guess[i].uk.setZero();
+                }
+                return zero_guess;
+
+            }
         }
 
         auto end_solve_qp = std::chrono::high_resolution_clock::now();

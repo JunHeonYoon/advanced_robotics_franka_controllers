@@ -21,12 +21,11 @@
 #include "types.h"
 #include "Params/params.h"
 namespace mpcc{
-//Return
 
 /// @brief Linear model of car: x_(k+1) = A * x_k + B * u_k + g
-/// @param A (Eigen::MatrixXd) Linear part of state
-/// @param B (Eigen::MatrixXd) Linear part of control input
-/// @param g (Eigen::MatrixXd) Constant part
+/// @param A (Eigen::Matrix<double, NX, NX>) Linear part of state
+/// @param B (Eigen::Matrix<double, NX, NU>) Linear part of control input
+/// @param g (Eigen::Matrix<double, NX, 1>) Constant part
 struct LinModelMatrix {
     A_MPC A;
     B_MPC B;

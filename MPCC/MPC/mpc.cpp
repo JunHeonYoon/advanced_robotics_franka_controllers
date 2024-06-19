@@ -73,9 +73,9 @@ void MPC::generateNewInitialGuess(const State &x0)
 
 MPCReturn MPC::runMPC(State &x0)
 {
-    double last_s = x0.s;
-    x0.s = track_.projectOnSpline(last_s, robot_->getEEPosition(stateToJointVector(x0)));
-    if(fabs(last_s - x0.s) > param_.max_dist_proj) valid_initial_guess_ = false;
+    // double last_s = x0.s;
+    // x0.s = track_.projectOnSpline(last_s, robot_->getEEPosition(stateToJointVector(x0)));
+    // if(fabs(last_s - x0.s) > param_.max_dist_proj) valid_initial_guess_ = false;
 
     if(valid_initial_guess_) updateInitialGuess(x0);
     else generateNewInitialGuess(x0);
@@ -87,6 +87,12 @@ MPCReturn MPC::runMPC(State &x0)
 
     initial_guess_ = solver_interface_->solveOCP(&sqp_status, &time_nmpc);
     if(sqp_status == MAX_ITER_EXCEEDED) valid_initial_guess_ = false;
+    else if(sqp_status == QP_INFISIBLE)
+    {
+        std::cout << "=========================================" << std::endl;
+        std::cout << "=========== QP did not solved ===========" << std::endl;
+        std::cout << "=========================================" << std::endl;
+    }
 
     return {initial_guess_[0].uk,initial_guess_,time_nmpc};
 }

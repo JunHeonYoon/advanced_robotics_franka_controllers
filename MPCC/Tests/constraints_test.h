@@ -56,9 +56,6 @@ void genRoundTrack(mpcc::ArcLengthSpline &track)
 
     // give points to arc length based 3-D curve fitting
     track.gen6DSpline(X,Y,Z,R);
-
-
-
 }
 
 TEST(TestConstraints, TestSelfCollision)
@@ -129,7 +126,7 @@ TEST(TestConstraints, TestSelfCollision)
     double l_x1 = (jac_constr.c_x*d_xk_vec + jac_constr.c_u*d_uk_vec + constr_info.c_vec)(mpcc::si_index.con_selcol);
     double l_u1 = constr_info.c_uvec(mpcc::si_index.con_selcol);
 
-    std::cout<< "Self Collision inequality condotion"<<std::endl;
+    std::cout<< "Self Collision inequality condition"<<std::endl;
     std::cout<< "real on X0: " << constr_info.c_lvec(mpcc::si_index.con_selcol) << " < " << constr_info.c_vec(mpcc::si_index.con_selcol) << " < " << constr_info.c_uvec(mpcc::si_index.con_selcol) << std::endl;
     std::cout<< "real on X1: " << r_l1 << " < " << r_x1 << " < " << r_u1 << std::endl;
     std::cout<< "lin  on X1: " << l_l1 << " < " << l_x1 << " < " <<  l_u1 << std::endl;
@@ -207,7 +204,7 @@ TEST(TestConstraints, TestSingularity)
     double l_x1 = (jac_constr.c_x*d_xk_vec + jac_constr.c_u*d_uk_vec + constr_info.c_vec)(mpcc::si_index.con_sing);
     double l_u1 = constr_info.c_uvec(mpcc::si_index.con_sing);
 
-    std::cout<< "Singularity inequality condotion"<<std::endl;
+    std::cout<< "Singularity inequality condition"<<std::endl;
     std::cout<< "real on X0: " << constr_info.c_lvec(mpcc::si_index.con_sing) << " < " << constr_info.c_vec(mpcc::si_index.con_sing) << " < " << constr_info.c_uvec(mpcc::si_index.con_sing) << std::endl;
     std::cout<< "real on X1: " << r_l1 << " < " << r_x1 << " < " << r_u1 << std::endl;
     std::cout<< "lin  on X1: " << l_l1 << " < " << l_x1 << " < " << l_u1 << std::endl;
