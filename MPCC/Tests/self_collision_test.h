@@ -22,8 +22,8 @@ TEST(TestSelfCollision, TestCalculateMLPOutput)
     bool result;
     try
     {
-        Eigen::Vector2d n_hidden;
-        n_hidden << 128, 64;
+        Eigen::VectorXd n_hidden(3);
+        n_hidden << 128, 64, 32;
         selcol->setNeuralNetwork(mpcc::PANDA_DOF, 1, n_hidden, true);
         beg = hd_clock::now();
         auto pred0 = selcol->calculateMlpOutput(q0, false);
@@ -44,6 +44,12 @@ TEST(TestSelfCollision, TestCalculateMLPOutput)
 
         if(fabs((min_est-min_dist1)/min_dist1)*100 < 5) result = true;
         else result = false;
+
+        // q0 << -0.46122822, -0.83015843, 1.45945742, -1.69096399, 1.58827731, 0.74419064, 0.21002424;
+        // auto pred = selcol->calculateMlpOutput(q0, false);
+        // std::cout << "min dist: " << pred.first.value() << std::endl; // python: 11.353057
+        // std::cout << "min jac : " << pred.second << std::endl; // python: 0.1930, -0.5562,  1.0094, -0.3212, -1.4554, 10.2682, -0.0309
+        // result = true;
     }
     catch(const std::exception& e)
     {

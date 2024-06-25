@@ -27,13 +27,6 @@ namespace mpcc{
 /// @param q5  (double) joint angle 
 /// @param q6  (double) joint angle 
 /// @param q7  (double) joint angle 
-/// @param dq1 (double) velocity of joint angle
-/// @param dq2 (double) velocity of joint angle
-/// @param dq3 (double) velocity of joint angle
-/// @param dq4 (double) velocity of joint angle
-/// @param dq5 (double) velocity of joint angle
-/// @param dq6 (double) velocity of joint angle
-/// @param dq7 (double) velocity of joint angle
 /// @param s   (double) path parameter, arc length 
 /// @param vs  (double) velocity of path parameter 
 struct State{ 
@@ -44,13 +37,6 @@ struct State{
     double q5;  // joint angle
     double q6;  // joint angle
     double q7;  // joint angle
-    double dq1; // joint velocity
-    double dq2; // joint velocity
-    double dq3; // joint velocity 
-    double dq4; // joint velocity
-    double dq5; // joint velocity
-    double dq6; // joint velocity
-    double dq7; // joint velocity
     double s;   // path parameter (arc length)
     double vs;  // velocity of path parameter
 
@@ -63,13 +49,6 @@ struct State{
         q5 = 0.0;
         q6 = 0.0;
         q7 = 0.0;
-        dq1 = 0.0;
-        dq2 = 0.0;
-        dq3 = 0.0;
-        dq4 = 0.0;
-        dq5 = 0.0;
-        dq6 = 0.0;
-        dq7 = 0.0;
         s = 0.0;
         vs = 0.0;
     }
@@ -86,33 +65,33 @@ struct State{
 };
 
 /// @brief Control input of manipulator system
-/// @param ddq1 (double) acceleration of joint angle
-/// @param ddq2 (double) acceleration of joint angle
-/// @param ddq3 (double) acceleration of joint angle
-/// @param ddq4 (double) acceleration of joint angle
-/// @param ddq5 (double) acceleration of joint angle
-/// @param ddq6 (double) acceleration of joint angle
-/// @param ddq7 (double) acceleration of joint angle
+/// @param dq1 (double) velocity of joint angle
+/// @param dq2 (double) velocity of joint angle
+/// @param dq3 (double) velocity of joint angle
+/// @param dq4 (double) velocity of joint angle
+/// @param dq5 (double) velocity of joint angle
+/// @param dq6 (double) velocity of joint angle
+/// @param dq7 (double) velocity of joint angle
 /// @param dVs (double) change of velocity of path parameter 
 struct Input{
-    double ddq1;
-    double ddq2;
-    double ddq3;
-    double ddq4;
-    double ddq5;
-    double ddq6;
-    double ddq7;
+    double dq1;
+    double dq2;
+    double dq3;
+    double dq4;
+    double dq5;
+    double dq6;
+    double dq7;
     double dVs;
 
     void setZero()
     {
-        ddq1 = 0.0;
-        ddq2 = 0.0;
-        ddq3 = 0.0;
-        ddq4 = 0.0;
-        ddq5 = 0.0;
-        ddq6 = 0.0;
-        ddq7 = 0.0;
+        dq1 = 0.0;
+        dq2 = 0.0;
+        dq3 = 0.0;
+        dq4 = 0.0;
+        dq5 = 0.0;
+        dq6 = 0.0;
+        dq7 = 0.0;
         dVs = 0.0;
     }
 };
@@ -136,7 +115,6 @@ struct PathToJson{
 typedef Eigen::Matrix<double,NX,1> StateVector;
 typedef Eigen::Matrix<double,PANDA_DOF,1> JointVector;
 typedef Eigen::Matrix<double,PANDA_DOF,1> dJointVector;
-typedef Eigen::Matrix<double,PANDA_DOF,1> ddJointVector;
 typedef Eigen::Matrix<double,NU,1> InputVector;
 
 // x_(k+1) = Ax + Bu + g
@@ -165,9 +143,8 @@ typedef Eigen::Matrix<double,NU,1> Bounds_u;
 
 StateVector stateToVector(const State &x);
 JointVector stateToJointVector(const State &x);
-dJointVector stateTodJointVector(const State &x);
+dJointVector inputTodJointVector(const Input &u);
 InputVector inputToVector(const Input &u);
-ddJointVector inputToddJointVector(const Input &u);
 
 State vectorToState(const StateVector &xk);
 Input vectorToInput(const InputVector &uk);

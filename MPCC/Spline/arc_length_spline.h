@@ -102,6 +102,7 @@ public:
     /// @return (double) projected arc lenth
     double projectOnSpline(const double &s, const Eigen::Vector3d ee_pos) const;
 
+    PathData path_data_;
 private:
     /// @brief set irregular path point data to make path data (PathData)
     /// @param X_in (Eigen::VectorXd) X position data
@@ -154,7 +155,6 @@ private:
     /// @return (double) unwrapped arc length (s) data
     double unwrapInput(double x) const;
 
-    PathData path_data_;
     CubicSpline spline_x_;
     CubicSpline spline_y_;
     CubicSpline spline_z_;

@@ -29,7 +29,13 @@ enum Status
 { 
     SOLVED,    
     MAX_ITER_EXCEEDED,
-    QP_INFISIBLE, 
+    QP_DualInfeasibleInaccurate,
+    QP_PrimalInfeasibleInaccurate,
+    QP_SolvedInaccurate,
+    QP_MaxIterReached,
+    QP_PrimalInfeasible,
+    QP_DualInfeasible,
+    Sigint, 
     INVALID_SETTINGS 
 };
 

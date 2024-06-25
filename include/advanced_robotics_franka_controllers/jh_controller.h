@@ -74,7 +74,6 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   // control value
   Eigen::Matrix<double, 7, 1> q_desired_;
   Eigen::Matrix<double, 7, 1> qdot_desired_;
-  Eigen::Matrix<double, 7, 1> qddot_desired_;
   Eigen::Matrix<double, 7, 1> torque_desired_;
 
 
@@ -154,7 +153,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 
   double Ts_mpcc_;
   double hz_mpcc_;
-  Eigen::Matrix<double, 7, 1> mpcc_qddot_desired_;
+  Eigen::Matrix<double, 7, 1> mpcc_qdot_desired_;
   double mpcc_dVs_desired_;
   PathParmeter s_info_, s_info_desired_;
   bool is_mpcc_solved_{false};
@@ -177,7 +176,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Time contact_time_;
   Eigen::Matrix<double,7,1> Kp_diag_, Kv_diag_;
   Eigen::Matrix<double,7,1> Kp_diag_init_, Kv_diag_init_;
-  double contact_thres{6.5};
+  double contact_thres{100.0};
   // ==================================
 };
 

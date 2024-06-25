@@ -253,9 +253,10 @@ void ArcLengthSpline::gen6DSpline(const Eigen::VectorXd &X,const Eigen::VectorXd
 
     // remove outliers, depending on how irregular the points are this can help
     RawPath clean_path;
-    clean_path = outlierRemoval(X,Y,Z,R);
+    // clean_path = outlierRemoval(X,Y,Z,R);
     // successively fit spline and re-sample
-    fitSpline(clean_path.X,clean_path.Y,clean_path.Z,clean_path.R);
+    // fitSpline(clean_path.X,clean_path.Y,clean_path.Z,clean_path.R);
+    fitSpline(X,Y,Z,R);
 }
 
 

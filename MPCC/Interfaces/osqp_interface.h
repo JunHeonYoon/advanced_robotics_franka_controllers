@@ -105,6 +105,7 @@ private:
     unsigned int sqp_iter_;
 
     bool is_solved_ = false;
+    OsqpEigen::Status qp_status_;
 
     void setCost(const std::array<OptVariables,N+1> &initial_guess, 
                  double *obj, Eigen::VectorXd *grad_obj, Eigen::MatrixXd *hess_obj);
@@ -119,9 +120,9 @@ private:
     void setQP(const std::array<OptVariables,N+1> &initial_guess,
                Eigen::MatrixXd *hess_obj, Eigen::VectorXd *grad_obj, double *obj, Eigen::MatrixXd *jac_constr, Eigen::VectorXd *constr, Eigen::VectorXd *l, Eigen::VectorXd *u);
     bool solveQP(const Eigen::MatrixXd &P, const Eigen::VectorXd &q, const Eigen::MatrixXd &A, const Eigen::VectorXd &l,const Eigen::VectorXd &u,
-                 Eigen::VectorXd &step, Eigen::VectorXd &step_lambda);
+                 Eigen::VectorXd &step, Eigen::VectorXd &step_lambda, OsqpEigen::Status& qp_status);
     bool SecondOrderCorrection(const std::array<OptVariables,N+1> &initial_guess, const Eigen::MatrixXd &hess_obj, const Eigen::VectorXd &grad_obj, const Eigen::MatrixXd & jac_constr,
-                               Eigen::VectorXd &step, Eigen::VectorXd &step_lambda);
+                               Eigen::VectorXd &step, Eigen::VectorXd &step_lambda, OsqpEigen::Status& qp_status);
     Eigen::MatrixXd BFGSUpdate(const Eigen::MatrixXd &Hess, const Eigen::VectorXd &step_prev, const Eigen::VectorXd &delta_grad_L);
     double meritLineSearch(const Eigen::VectorXd &step, const Eigen::MatrixXd &Hess, const Eigen::VectorXd &grad_obj, const double &obj, const Eigen::VectorXd &constr, const Eigen::VectorXd &l, const Eigen::VectorXd &u);
     double filterLineSearch(const std::array<OptVariables,N+1> &initial_guess, const Eigen::VectorXd &step, 

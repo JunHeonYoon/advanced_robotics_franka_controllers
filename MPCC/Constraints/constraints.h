@@ -117,19 +117,21 @@ private:
 
     /// @brief compute self-collision inequality constraint given current state and input
     /// @param x (State) current state
+    /// @param u (ControlInput) current control input
     /// @param k (int) receding horizon index
     /// @param constraint (*OneDConstraintInfo) constraint information(c,l,u) wrt state and input 
     /// @param Jac (*ConstraintsJac) jacobian of constraint value wrt state and input 
-    void getSelcollConstraint(const State &x,int k,
+    void getSelcollConstraint(const State &x,const Input &u,int k,
                               OneDConstraintInfo *constraint, OneDConstraintsJac* Jac);
 
     /// @brief compute Singularity inequality constraint given current state and input
     /// @param x (State) current state
+    /// @param u (ControlInput) current control input
     /// @param rb (RobotData) kinemetic information (ex. EE-pose, Jacobian, ...) wrt current state
     /// @param k (int) receding horizon index
     /// @param constraint (*OneDConstraintInfo) constraint information(c,l,u) wrt state and input 
     /// @param Jac (*ConstraintsJac) jacobian of constraint value wrt state and input 
-    void getSingularConstraint(const State &x,const RobotData &rb,int k,
+    void getSingularConstraint(const State &x,const Input &u,const RobotData &rb,int k,
                                OneDConstraintInfo *constraint, OneDConstraintsJac* Jac);
 
 

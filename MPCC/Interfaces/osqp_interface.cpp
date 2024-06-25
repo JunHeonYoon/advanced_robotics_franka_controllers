@@ -164,6 +164,7 @@ void OsqpInterface::setPolytopicConstraints(const std::array<OptVariables,N+1> &
         else if(constr_ineqp && jac_constr_ineqp)
         {
             constraints_.getConstraints(initial_guess[i].xk,initial_guess[i].uk,rbk,i,&constr_info_k,&jac_constr_k);
+            // std:cout << "self collision constraint["<<i<<"]: " << constr_info_k.c_vec(si_index.con_selcol) << " < " << constr_info_k.c_uvec(si_index.con_selcol) <<std::endl;
         }
         if(jac_constr_ineqp)
         {
@@ -297,31 +298,79 @@ std::array<OptVariables,N+1> OsqpInterface::solveOCP(Status *status, ComputeTime
         auto start_solve_qp = std::chrono::high_resolution_clock::now();
 
         // solve QP to get step_ and step_lambda_
-        if(!solveQP(Hess_, grad_obj_, jac_constr_, l_-constr_, u_-constr_, step_, step_lambda_))
+        if(!solveQP(Hess_, grad_obj_, jac_constr_, l_-constr_, u_-constr_, step_, step_lambda_, qp_status_))
         {
-            (*status) = QP_INFISIBLE;
+            // printOptVar( initial_guess_);
+            // exit(0);
+            switch (qp_status_)
+            {
+            case OsqpEigen::Status::DualInfeasibleInaccurate:
+                (*status) = QP_DualInfeasibleInaccurate;
+                break;
+            case OsqpEigen::Status::PrimalInfeasibleInaccurate:
+                (*status) = QP_PrimalInfeasibleInaccurate;
+                break;
+            case OsqpEigen::Status::SolvedInaccurate:
+                (*status) = QP_SolvedInaccurate;
+                break;
+            case OsqpEigen::Status::MaxIterReached:
+                (*status) = QP_MaxIterReached;
+                break;
+            case OsqpEigen::Status::PrimalInfeasible:
+                (*status) = QP_PrimalInfeasible;
+                break;
+            case OsqpEigen::Status::DualInfeasible:
+                (*status) = QP_DualInfeasible;
+                break;
+            case OsqpEigen::Status::Sigint:
+                (*status) = Sigint;
+                break;
+            }
             std::array<OptVariables,N+1> zero_guess;
             for(size_t i=0; i<N; i++)
             {
                 zero_guess[i].xk = initial_guess_[0].xk;
                 zero_guess[i].uk.setZero();
             }
-            return zero_guess;
-
+            initial_guess_ = zero_guess;
+            break;
         }
         if(sqp_param_.do_SOC)
         {
-            if(!SecondOrderCorrection(initial_guess_,Hess_,grad_obj_,jac_constr_,step_,step_lambda_))
+            if(!SecondOrderCorrection(initial_guess_,Hess_,grad_obj_,jac_constr_,step_,step_lambda_, qp_status_))
             {
-                (*status) = QP_INFISIBLE;
+                switch (qp_status_)
+            {
+            case OsqpEigen::Status::DualInfeasibleInaccurate:
+                (*status) = QP_DualInfeasibleInaccurate;
+                break;
+            case OsqpEigen::Status::PrimalInfeasibleInaccurate:
+                (*status) = QP_PrimalInfeasibleInaccurate;
+                break;
+            case OsqpEigen::Status::SolvedInaccurate:
+                (*status) = QP_SolvedInaccurate;
+                break;
+            case OsqpEigen::Status::MaxIterReached:
+                (*status) = QP_MaxIterReached;
+                break;
+            case OsqpEigen::Status::PrimalInfeasible:
+                (*status) = QP_PrimalInfeasible;
+                break;
+            case OsqpEigen::Status::DualInfeasible:
+                (*status) = QP_DualInfeasible;
+                break;
+            case OsqpEigen::Status::Sigint:
+                (*status) = Sigint;
+                break;
+            }
                 std::array<OptVariables,N+1> zero_guess;
                 for(size_t i=0; i<N; i++)
                 {
                     zero_guess[i].xk = initial_guess_[0].xk;
                     zero_guess[i].uk.setZero();
                 }
-                return zero_guess;
-
+                initial_guess_ = zero_guess;
+                break;
             }
         }
 
@@ -372,7 +421,7 @@ std::array<OptVariables,N+1> OsqpInterface::solveOCP(Status *status, ComputeTime
 }
 
 bool OsqpInterface::solveQP(const Eigen::MatrixXd &P, const Eigen::VectorXd &q, const Eigen::MatrixXd &A, const Eigen::VectorXd &l,const Eigen::VectorXd &u,
-                            Eigen::VectorXd &step, Eigen::VectorXd &step_lambda)
+                            Eigen::VectorXd &step, Eigen::VectorXd &step_lambda, OsqpEigen::Status &qp_status)
 {
     /*
     min   1/2 x' P x + q' x
@@ -420,7 +469,8 @@ bool OsqpInterface::solveQP(const Eigen::MatrixXd &P, const Eigen::VectorXd &q, 
 
     // solve the QP problem
     if (solver_.solveProblem() != OsqpEigen::ErrorExitFlag::NoError) return false;
-    if (solver_.getStatus() != OsqpEigen::Status::Solved) return false;
+    qp_status = solver_.getStatus();
+    if (solver_.getStatus() != OsqpEigen::Status::Solved && solver_.getStatus() != OsqpEigen::Status::SolvedInaccurate) return false;
 
     // get the controller input
     step = solver_.getSolution();
@@ -433,7 +483,7 @@ bool OsqpInterface::solveQP(const Eigen::MatrixXd &P, const Eigen::VectorXd &q, 
 }
 
 bool OsqpInterface::SecondOrderCorrection(const std::array<OptVariables,N+1> &initial_guess, const Eigen::MatrixXd &hess_obj, const Eigen::VectorXd &grad_obj, const Eigen::MatrixXd & jac_constr,
-                                          Eigen::VectorXd &step, Eigen::VectorXd &step_lambda)
+                                          Eigen::VectorXd &step, Eigen::VectorXd &step_lambda, OsqpEigen::Status& qp_status)
 {
     const std::array<OptVariables,N+1> updates_initial_guess = vectorToOptvar(OptvarToVector(initial_guess) + step);
 
@@ -454,7 +504,7 @@ bool OsqpInterface::SecondOrderCorrection(const std::array<OptVariables,N+1> &in
     Eigen::VectorXd l = l_step - d;
     Eigen::VectorXd u = u_step - d;
 
-    return solveQP(P, q, A, l, u, step, step_lambda);
+    return solveQP(P, q, A, l, u, step, step_lambda, qp_status);
 }
 
 Eigen::MatrixXd OsqpInterface::BFGSUpdate(const Eigen::MatrixXd &Hess, const Eigen::VectorXd &step_prev, const Eigen::VectorXd &delta_grad_L)
@@ -648,12 +698,17 @@ void OsqpInterface::printOptVar(std::array<OptVariables,N+1> opt_var)
 {
     for(size_t i=0;i<=N;i++)
     {
-        std::cout << "State[" << i << "]: " << stateToVector(opt_var[i].xk).transpose() << std::endl;; 
+        std::cout << "State[" << i << "]: " << std::endl;; 
+        std::cout << "\tq    : " << stateToJointVector(opt_var[i].xk).transpose() << std::endl;
+        std::cout << "\ts    : " << opt_var[i].xk.s << std::endl;
+        std::cout << "\ts dot: " << opt_var[i].xk.vs << std::endl;
     }
     std::cout <<" \n";
     for(size_t i=0;i<N;i++)
     {
-        std::cout << "Input[" << i << "]: " << inputToVector(opt_var[i].uk).transpose() << std::endl;; 
+        std::cout << "Input[" << i << "]: " << std::endl;; 
+        std::cout << "\tqdot: " << inputTodJointVector(opt_var[i].uk).transpose() << std::endl;; 
+        std::cout << "\tdVs  : " << opt_var[i].uk.dVs << std::endl;; 
     }
 }
 }

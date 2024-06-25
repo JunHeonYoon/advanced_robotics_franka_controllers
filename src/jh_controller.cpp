@@ -138,7 +138,6 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   async_mpcc_thread_ = std::thread(&jh_controller::asyncMPCCFProc, this);
   q_desired_.setZero();
   qdot_desired_.setZero();
-  qddot_desired_.setZero();
   torque_desired_.setZero();
 
   gripper_ac_.waitForServer();
@@ -191,10 +190,10 @@ void jh_controller::starting(const ros::Time& time) {
 
   s_info_.setZero();
 
-  Kp_diag_ << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
-  // Kp_diag_.setConstant(600.0);
-  Kv_diag_ << 50.0, 50.0, 50.0, 50.0, 100.0, 100.0, 200.0;
-  // Kv_diag_.setConstant(50.0);
+  // Kp_diag_ << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
+  Kp_diag_.setConstant(1600.0);
+  // Kv_diag_ << 50.0, 50.0, 50.0, 50.0, 100.0, 100.0, 200.0;
+  Kv_diag_.setConstant(10.0);
 }
 
 void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
@@ -256,8 +255,6 @@ void jh_controller::printState()
 		std::cout << std::fixed << std::setprecision(5) << q_.transpose() << std::endl;
 		std::cout << "q desired:\t";
 		std::cout << std::fixed << std::setprecision(5) << q_desired_.transpose() << std::endl;
-		std::cout << "qdd desired:\t";
-		std::cout << std::fixed << std::setprecision(5) << qddot_desired_.transpose() << std::endl;
 		std::cout << "x        :\t";
 		std::cout << x_.transpose() << std::endl;
 		std::cout << "R        :\t" << std::endl;
@@ -274,6 +271,8 @@ void jh_controller::printState()
 		  std::cout << s_info_.vs << std::endl;
       std::cout << "dVs      :\t";
 		  std::cout << s_info_.dVs << std::endl;
+      std::cout << "mani     :\t";
+		  std::cout << sqrt((j_*j_.transpose()).determinant()) << std::endl;
     }
     std::cout << "tau desired:\t";
 		std::cout << std::fixed << std::setprecision(5) << torque_desired_.transpose() << std::endl;
@@ -294,10 +293,10 @@ Eigen::Matrix<double, 7, 1> jh_controller::PDControl(const Eigen::Matrix<double,
     Kv_diag_init_ = Kv_diag_;
   }
   Eigen::Matrix<double,7,1> Kp_diag_target, Kv_diag_target;
-  Kp_diag_target << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
-  // Kp_diag_target.setConstant(600.0);
-  Kv_diag_target << 50.0, 50.0, 50.0, 50.0, 100.0, 100.0, 200.0;
-  // Kv_diag_target.setConstant(50.0);
+  // Kp_diag_target << 600.0, 600.0, 600.0, 600.0, 1000.0, 1000.0, 2000.0;
+  Kp_diag_target.setConstant(1600.0);
+  // Kv_diag_target << 50.0, 50.0, 50.0, 50.0, 100.0, 100.0, 200.0;
+  Kv_diag_target.setConstant(10.0);
 
   double gain_change_time = 5.0;
   if(is_contacted_)
@@ -440,7 +439,6 @@ void jh_controller::asyncCalculationProc()
       rotation_init_ = rotation_;
       transform_init_ = transform_;
       qdot_desired_ = qdot_init_;
-      qddot_desired_.setZero();
       q_desired_ = q_init_;
       mpcc_thread_enabled_ = false;
 
@@ -452,7 +450,7 @@ void jh_controller::asyncCalculationProc()
       {
           std::cout << "================ Mode change: MPCC ================" <<std::endl;
           s_info_.setZero();
-          mpcc_qddot_desired_.setZero();
+          mpcc_qdot_desired_.setZero();
           mpcc_dVs_desired_ = 0;
 
           mpcc::Track track = mpcc::Track(json_paths_.track_path);
@@ -462,13 +460,13 @@ void jh_controller::asyncCalculationProc()
 
           nav_msgs::Path mpcc_global_path;
           mpcc_global_path.header.frame_id = "panda_link0";
-          for(size_t i=0; i<track_xyzr.X.size(); i++)
+          for(size_t i=0; i<mpc_->track_.path_data_.n_points; i++)
           {
             geometry_msgs::PoseStamped pose;
-            pose.pose.position.x = track_xyzr.X(i);
-            pose.pose.position.y = track_xyzr.Y(i);
-            pose.pose.position.z = track_xyzr.Z(i);
-            rotationMatrixToQuaternion(track_xyzr.R[i], pose.pose);
+            pose.pose.position.x = mpc_->track_.path_data_.X(i);
+            pose.pose.position.y = mpc_->track_.path_data_.Y(i);
+            pose.pose.position.z = mpc_->track_.path_data_.Z(i);
+            rotationMatrixToQuaternion(mpc_->track_.path_data_.R[i], pose.pose);
             pose.header.frame_id = "panda_link0";
 
             mpcc_global_path.poses.push_back(pose);
@@ -489,10 +487,9 @@ void jh_controller::asyncCalculationProc()
       if(is_mpcc_solved_)
       {
         is_mpcc_solved_ = false;
-        qddot_desired_ = mpcc_qddot_desired_;
+        qdot_desired_ = mpcc_qdot_desired_;
         s_info_.dVs = mpcc_dVs_desired_;
       }
-      qdot_desired_ += qddot_desired_/hz_;
       q_desired_ += qdot_desired_/hz_;
       torque_desired_ = PDControl(q_desired_, qdot_desired_);
     }
@@ -544,8 +541,8 @@ void jh_controller::asyncMPCCFProc()
           mpcc_input_mutex_.lock();
           mpcc::State x0;
           mpcc::StateVector x0_vec;
-          // x0_vec << q_, qdot_, s_info_.s, s_info_.vs;
-          x0_vec << q_desired_, qdot_desired_, s_info_.s, s_info_.vs;
+          // x0_vec << q_, s_info_.s, s_info_.vs;
+          x0_vec << q_desired_, s_info_.s, s_info_.vs;
           x0 = mpcc::vectorToState(x0_vec);
 
           mpcc_input_mutex_.unlock();
@@ -560,7 +557,7 @@ void jh_controller::asyncMPCCFProc()
 
           mpcc_mutex_.lock();
           s_info_.s = x0.s;
-          mpcc_qddot_desired_ = mpcc::inputToddJointVector(mpc_sol.u0);
+          mpcc_qdot_desired_ = mpcc::inputTodJointVector(mpc_sol.u0);
           mpcc_dVs_desired_ = mpc_sol.u0.dVs;
           is_mpcc_solved_ = true;            
           mpcc_mutex_.unlock();

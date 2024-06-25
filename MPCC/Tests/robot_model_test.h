@@ -16,14 +16,15 @@ TEST(TestRobotModel, TestGetEEPosition)
     std::unique_ptr<mpcc::RobotModel> robot;
     robot = std::make_unique<mpcc::RobotModel>();
     mpcc::JointVector q0;
-    q0 <<  -0.002, -0.001,  0.002, -1.574,  0.006,  1.584,  0.789;
+    // q0 <<  -0.002, -0.001,  0.002, -1.574,  0.006,  1.584,  0.789;
+    q0 << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
     Vector3d x0 = Vector3d::Zero();
     bool result;
     try
     {
         x0 = robot->getEEPosition(q0);
-        // std::cout << "EE position: " << std::fixed << std::setprecision(3) <<
-        //  x0.transpose() << std::endl;
+        std::cout << "EE position: " << std::fixed << std::setprecision(5) <<
+         x0.transpose() << std::endl;
         // real robot: 
         // 0.557 0.001 0.522
         result = true;
@@ -49,8 +50,8 @@ TEST(TestRobotModel, TestGetEEOrientation)
     try
     {
         r0 = robot->getEEOrientation(q0, PANDA_NUM_LINKS);
-        // std::cout << "EE ori: \n" << std::fixed << std::setprecision(3) <<
-        //  r0 << std::endl;
+        std::cout << "EE ori: \n" << std::fixed << std::setprecision(3) <<
+         r0 << std::endl;
         result = true;
     }
     catch(const std::exception& e)
