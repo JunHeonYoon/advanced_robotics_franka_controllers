@@ -158,10 +158,13 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   mpc_ = std::make_unique<mpcc::MPC>(jsonConfig["Ts"],json_paths_);
   mpcc_trigger_ = franka_hw::TriggerRate(hz_mpcc_);
   integrator_ = make_unique<mpcc::Integrator>(Ts_mpcc_, json_paths_);
+  selcolNN_ = make_unique<mpcc::SelCollNNmodel>();
 
   mpcc_global_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/global_path", 1);
   mpcc_local_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/local_path", 1);
   mpcc_ref_path_pub_ = node_handle.advertise<nav_msgs::Path>("/mpcc/ref_path", 1);
+  mpcc_mani_pub_ = node_handle.advertise<std_msgs::Float64>("/mpcc/manipulability", 1);
+  mpcc_selcol_pub_ = node_handle.advertise<std_msgs::Float64>("/mpcc/min_distance", 1);
   ee_pose_pub_ = node_handle.advertise<sensor_msgs::JointState>("/ee_planner/joint_states", 1);
   // ==================================
 
@@ -194,6 +197,11 @@ void jh_controller::starting(const ros::Time& time) {
   Kp_diag_.setConstant(1600.0);
   // Kv_diag_ << 50.0, 50.0, 50.0, 50.0, 100.0, 100.0, 200.0;
   Kv_diag_.setConstant(10.0);
+
+  // ============== MPCC ==============
+  selcolNN_->setNeuralNetwork(mpcc::PANDA_DOF, 1,(Eigen::VectorXd(3) << 128, 64, 32).finished(), true);
+  // ==================================
+
 }
 
 void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
@@ -273,6 +281,8 @@ void jh_controller::printState()
 		  std::cout << s_info_.dVs << std::endl;
       std::cout << "mani     :\t";
 		  std::cout << sqrt((j_*j_.transpose()).determinant()) << std::endl;
+      std::cout << "min dist :\t";
+		  std::cout << pred_min_dist_ << std::endl;
     }
     std::cout << "tau desired:\t";
 		std::cout << std::fixed << std::setprecision(5) << torque_desired_.transpose() << std::endl;
@@ -368,6 +378,9 @@ void jh_controller::getCurrentState()
   {
     s_info_.s += s_info_.vs / hz_;
     s_info_.vs += s_info_.dVs / hz_;
+
+    auto pred_NN = selcolNN_->calculateMlpOutput(q_, false);
+    pred_min_dist_ = pred_NN.first.value();
   }
   // ==================================
 
@@ -399,7 +412,6 @@ void jh_controller::getCurrentState()
   ee_pose.name[5] = "virtual_joint_Y";
   ee_pose.name[6] = "panda_finger_joint1";
   ee_pose.name[7] = "panda_finger_joint2";
-
 
   ee_pose_pub_.publish(ee_pose);
 }
@@ -606,6 +618,13 @@ void jh_controller::asyncMPCCFProc()
           }
           mpcc_ref_path_pub_.publish(mpcc_ref_path);
 
+          // publish manipulability and minimum distance btw links
+          std_msgs::Float64 mani, min_dist;
+          mani.data = sqrt((j_*j_.transpose()).determinant());
+          min_dist.data = pred_min_dist_;
+
+          mpcc_mani_pub_.publish(mani);
+          mpcc_selcol_pub_.publish(min_dist);
 
           auto end = std::chrono::high_resolution_clock::now();
           std::chrono::duration<double, std::milli> elapsed = end - start;

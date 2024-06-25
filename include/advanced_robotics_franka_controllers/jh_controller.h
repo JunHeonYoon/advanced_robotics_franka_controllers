@@ -41,6 +41,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #include <sensor_msgs/JointState.h>
+#include <std_msgs/Float64.h>
 // ==================================
 
 namespace advanced_robotics_franka_controllers {
@@ -148,6 +149,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 
   std::unique_ptr<mpcc::Integrator> integrator_;
   std::unique_ptr<mpcc::MPC> mpc_;
+  std::unique_ptr<mpcc::SelCollNNmodel> selcolNN_;
   mpcc::PathToJson json_paths_;
   franka_hw::TriggerRate mpcc_trigger_;
 
@@ -157,6 +159,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   double mpcc_dVs_desired_;
   PathParmeter s_info_, s_info_desired_;
   bool is_mpcc_solved_{false};
+  double pred_min_dist_;
 
   std::thread async_mpcc_thread_;
   bool mpcc_thread_enabled_{false};
@@ -168,6 +171,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Publisher mpcc_global_path_pub_;
   ros::Publisher mpcc_local_path_pub_;
   ros::Publisher mpcc_ref_path_pub_;
+  ros::Publisher mpcc_mani_pub_;
+  ros::Publisher mpcc_selcol_pub_;
   ros::Publisher ee_pose_pub_;
   
 
