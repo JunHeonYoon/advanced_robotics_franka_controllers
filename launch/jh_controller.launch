@@ -7,6 +7,11 @@
     <arg name="load_gripper" value="$(arg load_gripper)" />
   </include>
 
+   <node pkg="joy" type="joy_node" name="joy_node">
+    <param name="dev" value="/dev/input/js0" />
+  </node>
+
+
   <rosparam command="load" file="$(find advanced_robotics_franka_controllers)/config/advanced_robotics_franka_controllers.yaml" />
   <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen"  args="jh_controller"/>
   <node pkg="rviz" type="rviz" output="screen" name="rviz" args="-d $(find advanced_robotics_franka_controllers)/launch/robot.rviz"/>
