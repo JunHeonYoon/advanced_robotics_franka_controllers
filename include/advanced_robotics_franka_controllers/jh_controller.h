@@ -19,6 +19,7 @@
 #include <ros/time.h>
 #include <realtime_tools/realtime_publisher.h>
 #include <geometry_msgs/Twist.h>
+#include <sensor_msgs/Joy.h>
 #include <Eigen/Dense>
 
 #include "suhan_benchmark.h"
@@ -87,7 +88,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Time control_start_time_;
   SuhanBenchmark bench_timer_;
 
-  enum CTRL_MODE{NONE, HOME, NJSDF};
+  enum CTRL_MODE{NONE, HOME, TELEOPERATE};
   CTRL_MODE control_mode_{NONE};
 	bool is_mode_changed_ {false};
 
@@ -97,12 +98,18 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   std::thread async_calculation_thread_;
   std::thread mode_change_thread_;
 
+  ros::Subscriber joy_sub_;
+  Eigen::Matrix<double, 6, 1> joy_vel_command_; // Linear and Angular velocity
+
+  void joyCallback(const sensor_msgs::Joy::ConstPtr& msg);
+
   void printState();
   void moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
   
   void setMode(const CTRL_MODE & mode);
   void getCurrentState();
   void setDesiredTorque(const Eigen::Matrix<double, 7, 1> & desired_torque);
+  Eigen::Matrix<double, 7, 1> PDControl(const Eigen::Matrix<double, 7, 1> & q_desired, const Eigen::Matrix<double, 7, 1> & qdot_desired);
 
   void modeChangeReaderProc();
   void asyncCalculationProc();

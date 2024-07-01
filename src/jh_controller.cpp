@@ -108,6 +108,8 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   qdot_desired_.setZero();
   torque_desired_.setZero();
 
+  joy_sub_ = node_handle.subscribe<sensor_msgs::Joy>("/joy", 10, &jh_controller::joyCallback, this);
+  joy_vel_command_.setZero();
 
   return true;
 }
@@ -201,13 +203,18 @@ void jh_controller::moveJointPositionTorque(const Eigen::Matrix<double, 7, 1> &t
                                         q_init_(i), target_q(i), 0, 0);
   }
 
+
+  torque_desired_ =  PDControl(q_desired_, qdot_desired_);
+}
+
+Eigen::Matrix<double, 7, 1> jh_controller::PDControl(const Eigen::Matrix<double, 7, 1> & q_desired, const Eigen::Matrix<double, 7, 1> & qdot_desired)
+{
   double kp, kv;
   kp = 1500;
   kv = 10;
 
-  torque_desired_ = m_ * ( kp*(q_desired_ - q_) + kv*(qdot_desired_ - qdot_)) + c_;
+  return m_ * ( kp*(q_desired - q_) + kv*(qdot_desired - qdot_)) + c_;
 }
-
 // --------------------------- Controller Core Methods -----------------------------------------
 void jh_controller::setMode(const CTRL_MODE & mode)
 {
@@ -259,6 +266,8 @@ void jh_controller::asyncCalculationProc()
       control_start_time_ = play_time_;
       q_init_ = q_;
       qdot_init_ = qdot_;
+      q_desired_ = q_init_;
+      qdot_desired_ = qdot_init_;
       x_init_ = x_;
       rotation_init_ = rotation_;
       transform_init_ = transform_;
@@ -268,8 +277,15 @@ void jh_controller::asyncCalculationProc()
     {
       Eigen::Matrix<double, 7, 1> target_q;
       target_q << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
-      target_q << 0.516,  0.447,  0.384, -1.085, -0.143, 1.587,  1.517;
       jh_controller::moveJointPositionTorque(target_q, 5.0);
+    }
+    else if(control_mode_ == TELEOPERATE)
+    {
+      Eigen::Matrix<double, 7, 6> j_pse = j_.transpose() * (j_*j_.transpose()).inverse();
+      qdot_desired_ = j_pse * joy_vel_command_;
+      q_desired_ = q_ + qdot_desired_ / hz_;
+
+      torque_desired_ = jh_controller::PDControl(q_desired_, qdot_desired_);
     }
     else
     {
@@ -293,6 +309,9 @@ void jh_controller::modeChangeReaderProc()
           case 'h':
             jh_controller::setMode(HOME);
             break;
+          case 't':
+            jh_controller::setMode(TELEOPERATE);
+            break;
           default:
             jh_controller::setMode(NONE);
             break;
@@ -301,6 +320,30 @@ void jh_controller::modeChangeReaderProc()
       }
       
     }
+}
+
+void jh_controller::joyCallback(const sensor_msgs::Joy::ConstPtr& msg)
+{
+  double max_lin_vel = 0.2;
+  double max_ang_vel = 0.2;
+
+  if(msg->buttons[6] ==1)
+  {
+    Eigen::Vector3d lin_command;
+    lin_command(0) = msg->axes[0]; // x
+    lin_command(1) = msg->axes[1]; // y
+    lin_command(2) = msg->axes[3]; // z
+    lin_command = lin_command.normalized();
+    
+    joy_vel_command_.segment(0,3) = max_lin_vel * lin_command;
+    
+    // TODO: angular velocuty
+
+  }
+  else
+  {
+    joy_vel_command_.setZero();
+  }
 }
 // ------------------------------------------------------------------------------------------------
 

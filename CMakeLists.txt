@@ -36,6 +36,7 @@ catkin_package(
     dynamic_reconfigure
     franka_hw
     geometry_msgs
+    sensor_msgs
     hardware_interface
     pluginlib
     realtime_tools
