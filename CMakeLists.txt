@@ -11,6 +11,8 @@ LIST( APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}" )
 
 INCLUDE(cmake/FindRBDL.cmake)
 
+add_definitions(-DBUILD_DIRECTORY=\"${CMAKE_SOURCE_DIR}\")
+
 
 find_package(catkin REQUIRED COMPONENTS
   roscpp
@@ -28,6 +30,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 find_package(Eigen3 REQUIRED)
 find_package(Franka 0.5.0 REQUIRED)
+find_package(OsqpEigen REQUIRED)
 
 catkin_package(
   LIBRARIES ${PROJECT_NAME}
@@ -62,7 +65,7 @@ include_directories(
 add_library(${PROJECT_NAME}
 src/default_controller.cpp
 src/jh_controller.cpp
-src/collision_detection_controller.cpp
+src/hs_controller.cpp
 src/collision_detection_controller.cpp
 #src/position_joint_space_slam_test_controller.cpp
 #src/impedance_controller.cpp
@@ -109,6 +112,7 @@ src/robot_model.cpp
 src/torque_joint_space_controller_joint_test.cpp
 src/position_joint_space_controller_joint_test.cpp
 src/velocity_joint_space_controller.cpp
+src/QP_controller.cpp
 )
 
 add_dependencies(advanced_robotics_franka_controllers
@@ -122,7 +126,9 @@ add_dependencies(advanced_robotics_franka_controllers
 target_link_libraries(${PROJECT_NAME} PUBLIC
   ${Franka_LIBRARIES}
   ${catkin_LIBRARIES}
-    ${RBDL_LIBRARY}
+  ${RBDL_LIBRARY}
+  OsqpEigen::OsqpEigen
+
 
 )
 #############

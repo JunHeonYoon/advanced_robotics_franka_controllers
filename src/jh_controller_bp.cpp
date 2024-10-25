@@ -10,6 +10,7 @@
 #include <ros/ros.h>
 
 #include <franka/robot_state.h>
+#include <franka_gripper/GraspAction.h>
 
 #include "math_type_define.h"
 
@@ -90,14 +91,14 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
     return false;
   }
 
-  auto* velocity_joint_interface = robot_hw->get<hardware_interface::VelocityJointInterface>();
-  if (velocity_joint_interface == nullptr) {
-    ROS_ERROR_STREAM("jh_controller: Error getting velocity joint interface from hardware");
+  auto* position_joint_interface = robot_hw->get<hardware_interface::PositionJointInterface>();
+  if (position_joint_interface == nullptr) {
+    ROS_ERROR_STREAM("jh_controller: Error getting position joint interface from hardware");
     return false;
   }
   for (size_t i = 0; i < 7; ++i) {
     try {
-      joint_handles_.push_back(velocity_joint_interface->getHandle(joint_names[i]));
+      joint_handles_.push_back(position_joint_interface->getHandle(joint_names[i]));
     } catch (const hardware_interface::HardwareInterfaceException& ex) {
       ROS_ERROR_STREAM("jh_controller: Exception getting joint handles: " << ex.what());
       return false;
@@ -114,8 +115,11 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   joy_sub_ = node_handle.subscribe<sensor_msgs::Joy>("/joy", 10, &jh_controller::joyCallback, this);
   joy_vel_command_.setZero();
 
-  gripper_ac_homing_.waitForServer();  
-  gripper_ac_homing_.sendGoal(franka_gripper::HomingGoal());
+  gripper_ac_.waitForServer();  
+  franka_gripper::MoveGoal goal;
+  goal.speed = 0.1;
+  goal.width = 0.08;
+  gripper_ac_.sendGoal(goal);
   gripper_width_ = 0.08;
 
   return true;
@@ -124,7 +128,6 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
 void jh_controller::starting(const ros::Time& time) {
   start_time_ = time;
   play_time_ = time;
-  control_start_time_ = time;
 
 	
   for (size_t i = 0; i < 7; ++i) {
@@ -170,7 +173,7 @@ void jh_controller::update(const ros::Time& time, const ros::Duration& period)
   }
 
   jh_controller::printState();
-  jh_controller::setDesiredJointVel(qdot_desired_);
+  jh_controller::setDesiredJoint(q_desired_);
   tmp_use = true;
 }
 
@@ -221,6 +224,8 @@ void jh_controller::moveJointPosition(const Eigen::Matrix<double, 7, 1> &target_
     qdot_desired_(i) = DyrosMath::cubicDot(play_time_.toSec(), control_start_time_.toSec(), control_start_time_.toSec() + duration,
                                         q_init_(i), target_q(i), 0, 0);
   }
+
+
 }
 
 // --------------------------- Controller Core Methods -----------------------------------------
@@ -261,20 +266,16 @@ void jh_controller::getCurrentState()
   x_dot_ = j_ * qdot_;
 }
 
-void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desired_qdot)
+void jh_controller::setDesiredJoint(const Eigen::Matrix<double, 7, 1> & desired_q)
 {
   for (size_t i = 0; i < 7; ++i) {
-    joint_handles_[i].setCommand(desired_qdot(i));
+    joint_handles_[i].setCommand(desired_q(i));
   }
-  // gripper_ac_.waitForServer(); 
-  // franka_gripper::GraspGoal goal;
-  // goal.width = gripper_width_;
-  // goal.speed = 0.01;
-  // goal.force = 0.1;
-  // goal.epsilon.inner = 0.005;
-  // goal.epsilon.outer = 0.005;
-
-  // gripper_ac_.sendGoal(goal);
+  gripper_ac_.waitForServer(); 
+  franka_gripper::MoveGoal goal;
+  goal.width = gripper_width_;
+  goal.speed = 0.01;
+  gripper_ac_.sendGoal(goal);
 }
 
 void jh_controller::asyncQPControllerProc()
@@ -353,18 +354,11 @@ void jh_controller::asyncCalculationProc()
         
         if(gripper_command_ == OPEN)
         {
-          // gripper_width_ = std::min(0.08, gripper_width_ + 0.1 / hz_);
-          gripper_width_ = 0.08;
+          gripper_width_ = std::min(0.08, gripper_width_ + 0.1 / hz_);
         }
         else if(gripper_command_ == CLOSE)
         {
-          // gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
-          gripper_width_ = 0.0;
-        }
-        else if(gripper_command_ == STOP)
-        {
-          // gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
-          gripper_width_ = 0.08;
+          gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
         }
       }
       q_desired_ = q_ + qdot_desired_ / hz_;
@@ -373,12 +367,7 @@ void jh_controller::asyncCalculationProc()
     }
     else
     {
-      for(size_t i=0; i<7;i++)
-      {
-        qdot_desired_(i) = DyrosMath::cubic(play_time_.toSec(), control_start_time_.toSec(), control_start_time_.toSec() + 3.0,
-                                            qdot_init_(i), 0.0, 0, 0);
-      }
-      q_desired_ = q_ + qdot_desired_ / hz_;
+      q_desired_ = q_;
     }
     calculation_mutex_.unlock();
     double elapsed_time = bench_timer_.elapsedAndReset();
@@ -415,15 +404,13 @@ void jh_controller::joyCallback(const sensor_msgs::Joy::ConstPtr& msg)
 {
   double max_lin_vel = 0.2;
   double max_ang_vel = 0.5;
-   
-  // if(msg->buttons[4] == 1)
-  if(msg->buttons[6] == 1)
+
+  if(msg->buttons[4] == 1)
   {
     Eigen::Vector3d lin_command;
     lin_command(0) = msg->axes[1]; // x
     lin_command(1) = msg->axes[0]; // y
-    // lin_command(2) = msg->axes[4]; // z
-    lin_command(2) = msg->axes[3]; // z
+    lin_command(2) = msg->axes[4]; // z
     // lin_command = lin_command.normalized();
     
     joy_vel_command_.head(3) = max_lin_vel * lin_command;
@@ -431,36 +418,18 @@ void jh_controller::joyCallback(const sensor_msgs::Joy::ConstPtr& msg)
     Eigen::Vector3d ang_command;
     ang_command(0) = 0.0; // roll
     ang_command(1) = 0.0; // pitch
-    // ang_command(2) = msg->axes[3];; // yaw
-    ang_command(2) = msg->axes[2];; // yaw
+    ang_command(2) = msg->axes[3];; // yaw
 
     joy_vel_command_.tail(3) = max_ang_vel * ang_command;
 
     gripper_command_ =  STOP;
-    // if(msg->buttons[2] == 1)
-    if(msg->buttons[3] == 1)
+    if(msg->buttons[2] == 1)
     {
       gripper_command_ =  CLOSE;
-      // gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
-      gripper_ac_close_.waitForServer();  
-      franka_gripper::GraspGoal goal;
-      goal.speed = 0.1;
-      // goal.width = gripper_width_;
-      goal.force = 0.1;
-      goal.epsilon.inner = 0.001;
-      goal.epsilon.outer = 100. * 0.07;
-      gripper_ac_close_.sendGoal(goal);
     }
-    if(msg->buttons[1] == 1)
     if(msg->buttons[1] == 1)
     {
       gripper_command_ =  OPEN;
-      // gripper_width_ = std::min(0.08, gripper_width_ + 0.1 / hz_);
-      gripper_ac_open_.waitForServer();  
-      franka_gripper::MoveGoal goal;
-      goal.speed = 0.1;
-      goal.width = 0.08;
-      gripper_ac_open_.sendGoal(goal);
     }
 
   }

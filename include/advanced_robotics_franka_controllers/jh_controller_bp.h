@@ -28,7 +28,6 @@
 #include <actionlib/client/simple_action_client.h>
 #include <actionlib/client/terminal_state.h>
 #include <franka_gripper/GraspAction.h>
-#include <franka_gripper/HomingAction.h>
 #include <franka_gripper/MoveAction.h>
 
 
@@ -36,8 +35,7 @@ namespace advanced_robotics_franka_controllers {
 
 class jh_controller : public controller_interface::MultiInterfaceController<
 								   franka_hw::FrankaModelInterface,
-                  //  hardware_interface::PositionJointInterface,       
-                   hardware_interface::VelocityJointInterface,
+                   hardware_interface::PositionJointInterface,
 								   franka_hw::FrankaStateInterface> {
                      
   bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle) override;
@@ -60,7 +58,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   // current state
   Eigen::Matrix<double, 7, 1> q_;
   Eigen::Matrix<double, 7, 1> qdot_;
-  // Eigen::Matrix<double, 7, 1> torque_;
+  Eigen::Matrix<double, 7, 1> torque_;
 
   // control value
   Eigen::Matrix<double, 7, 1> q_desired_;
@@ -77,10 +75,10 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 	Eigen::Matrix<double, 6, 1> x_error_;
 
   // dynamics
-  // Eigen::Matrix<double, 7, 1> g_; // gravity matrix
-  // Eigen::Matrix<double, 7, 7> m_; // mass matrix
-  // Eigen::Matrix<double, 7, 7> m_inv_; // Inverse of mass matrix
-  // Eigen::Matrix<double, 7, 1> c_; // coliolis matrix
+  Eigen::Matrix<double, 7, 1> g_; // gravity matrix
+  Eigen::Matrix<double, 7, 7> m_; // mass matrix
+  Eigen::Matrix<double, 7, 7> m_inv_; // Inverse of mass matrix
+  Eigen::Matrix<double, 7, 1> c_; // coliolis matrix
 
   // For controller
 	Eigen::Matrix<double, 6, 7> j_;	// Full basic Jacobian matrix
@@ -118,12 +116,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   enum GRIPPER_MODE{STOP, OPEN, CLOSE};
   GRIPPER_MODE gripper_command_{STOP};
 
-  actionlib::SimpleActionClient<franka_gripper::GraspAction> gripper_ac_close_
-  {"/franka_gripper/grasp", true};
-  actionlib::SimpleActionClient<franka_gripper::MoveAction> gripper_ac_open_
+  actionlib::SimpleActionClient<franka_gripper::MoveAction> gripper_ac_
   {"/franka_gripper/move", true};
-  actionlib::SimpleActionClient<franka_gripper::HomingAction> gripper_ac_homing_
-  {"/franka_gripper/homing", true};
 
   double gripper_width_;
 
@@ -134,7 +128,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   
   void setMode(const CTRL_MODE & mode);
   void getCurrentState();
-  void setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desired_qdot);
+  void setDesiredJoint(const Eigen::Matrix<double, 7, 1> & desired_q);
 
   void modeChangeReaderProc();
   void asyncCalculationProc();
