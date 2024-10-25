@@ -111,12 +111,13 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   qp_controller_ = std::make_unique<QP_CONTROLLER::QP>();
   // async_qp_controller_thread_ = std::thread(&jh_controller::asyncQPControllerProc, this);
 
-  joy_sub_ = node_handle.subscribe<sensor_msgs::Joy>("/joy", 10, &jh_controller::joyCallback, this);
-  joy_vel_command_.setZero();
+  haptic_pose_sub_ = node_handle.subscribe<geometry_msgs::PoseStamped>("/haptic/pose", 1, &jh_controller::hapticPoseCallback, this);
+  haptic_twist_sub_ = node_handle.subscribe<geometry_msgs::Twist>("/haptic/twist", 1, &jh_controller::hapticTwistCallback, this);
+  haptic_button_sub_ = node_handle.subscribe<std_msgs::Int8MultiArray>("/haptic/button_state", 1, &jh_controller::hapticButtonCallback, this);
+  haptic_vel_command_.setZero();
 
   gripper_ac_homing_.waitForServer();  
   gripper_ac_homing_.sendGoal(franka_gripper::HomingGoal());
-  gripper_width_ = 0.08;
 
   return true;
 }
@@ -202,11 +203,11 @@ void jh_controller::printState()
 		std::cout << std::fixed << std::setprecision(3) << rotation_ << std::endl;
     std::cout << "J        :\t" << std::endl;
 		std::cout << std::fixed << std::setprecision(3) << j_ << std::endl;
-    std::cout << "joy command   :\t";
-		std::cout << std::fixed << std::setprecision(3) << joy_vel_command_.transpose() << std::endl;
-		std::cout << gripper_command_ << std::endl;
-    std::cout << "gripper_width :\t" << std::endl;
-		std::cout << std::fixed << std::setprecision(3) << gripper_width_ << std::endl;
+    std::cout << "haptic command :\t";
+		std::cout << std::fixed << std::setprecision(3) << haptic_vel_command_.transpose() << std::endl;
+    std::cout << "gripper mode   :\t";
+		if(gripper_command_ == OPEN) std::cout << "OPEN" << std::endl;
+		else if(gripper_command_ == CLOSE) std::cout << "CLOSE" << std::endl;
 
     std::cout << "-------------------------------------------------------------------\n\n" << std::endl;
   }
@@ -266,15 +267,6 @@ void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desir
   for (size_t i = 0; i < 7; ++i) {
     joint_handles_[i].setCommand(desired_qdot(i));
   }
-  // gripper_ac_.waitForServer(); 
-  // franka_gripper::GraspGoal goal;
-  // goal.width = gripper_width_;
-  // goal.speed = 0.01;
-  // goal.force = 0.1;
-  // goal.epsilon.inner = 0.005;
-  // goal.epsilon.outer = 0.005;
-
-  // gripper_ac_.sendGoal(goal);
 }
 
 void jh_controller::asyncQPControllerProc()
@@ -287,7 +279,7 @@ void jh_controller::asyncQPControllerProc()
     //   qp_controller_input_mutex_.lock();
     // timer.reset();
       qp_controller_->setCurrentState(q_, qdot_, j_);
-      qp_controller_->setDesiredEEVel(joy_vel_command_);
+      qp_controller_->setDesiredEEVel(haptic_vel_command_);
       // qp_controller_input_mutex_.unlock();
 
       Eigen::Matrix<double, 7, 1> opt_qdot;
@@ -344,28 +336,10 @@ void jh_controller::asyncCalculationProc()
     }
     else if(control_mode_ == TELEOPERATE)
     {
-      // Eigen::Matrix<double, 7, 6> j_pse = j_.transpose() * (j_*j_.transpose()).inverse();
-      // qdot_desired_ = j_pse * joy_vel_command_;
       if(tmp_use)
       {
         tmp_use = false;
         asyncQPControllerProc();
-        
-        if(gripper_command_ == OPEN)
-        {
-          // gripper_width_ = std::min(0.08, gripper_width_ + 0.1 / hz_);
-          gripper_width_ = 0.08;
-        }
-        else if(gripper_command_ == CLOSE)
-        {
-          // gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
-          gripper_width_ = 0.0;
-        }
-        else if(gripper_command_ == STOP)
-        {
-          // gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
-          gripper_width_ = 0.08;
-        }
       }
       q_desired_ = q_ + qdot_desired_ / hz_;
       
@@ -411,65 +385,73 @@ void jh_controller::modeChangeReaderProc()
     }
 }
 
-void jh_controller::joyCallback(const sensor_msgs::Joy::ConstPtr& msg)
+void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
-  double max_lin_vel = 0.2;
-  double max_ang_vel = 0.5;
-   
-  // if(msg->buttons[4] == 1)
-  if(msg->buttons[6] == 1)
-  {
+  double max_lin_vel = 0.1;
+  // double max_ang_vel = 0.5;
+
     Eigen::Vector3d lin_command;
-    lin_command(0) = msg->axes[1]; // x
-    lin_command(1) = msg->axes[0]; // y
-    // lin_command(2) = msg->axes[4]; // z
-    lin_command(2) = msg->axes[3]; // z
-    // lin_command = lin_command.normalized();
+    lin_command.setZero();
+    if(fabs(msg->pose.position.x) > 0.01) lin_command(0) = std::min(max_lin_vel, std::max(-max_lin_vel, -msg->pose.position.x));
+    if(fabs(msg->pose.position.y) > 0.01) lin_command(1) = std::min(max_lin_vel, std::max(-max_lin_vel, -msg->pose.position.y));
+    if(fabs(msg->pose.position.z) > 0.01) lin_command(2) = std::min(max_lin_vel, std::max(-max_lin_vel, msg->pose.position.z));
+
+    haptic_vel_command_.head(3) = lin_command;
     
-    joy_vel_command_.head(3) = max_lin_vel * lin_command;
-    
-    Eigen::Vector3d ang_command;
-    ang_command(0) = 0.0; // roll
-    ang_command(1) = 0.0; // pitch
-    // ang_command(2) = msg->axes[3];; // yaw
-    ang_command(2) = msg->axes[2];; // yaw
+    // Eigen::Vector3d ang_command;
+    // ang_command(0) = 0.0; // roll
+    // ang_command(1) = 0.0; // pitch
+    // ang_command(2) = 0.0;; // yaw
 
-    joy_vel_command_.tail(3) = max_ang_vel * ang_command;
-
-    gripper_command_ =  STOP;
-    // if(msg->buttons[2] == 1)
-    if(msg->buttons[3] == 1)
-    {
-      gripper_command_ =  CLOSE;
-      // gripper_width_ = std::max(0.00, gripper_width_ - 0.1 / hz_);
-      gripper_ac_close_.waitForServer();  
-      franka_gripper::GraspGoal goal;
-      goal.speed = 0.1;
-      // goal.width = gripper_width_;
-      goal.force = 0.1;
-      goal.epsilon.inner = 0.001;
-      goal.epsilon.outer = 100. * 0.07;
-      gripper_ac_close_.sendGoal(goal);
-    }
-    if(msg->buttons[1] == 1)
-    if(msg->buttons[1] == 1)
-    {
-      gripper_command_ =  OPEN;
-      // gripper_width_ = std::min(0.08, gripper_width_ + 0.1 / hz_);
-      gripper_ac_open_.waitForServer();  
-      franka_gripper::MoveGoal goal;
-      goal.speed = 0.1;
-      goal.width = 0.08;
-      gripper_ac_open_.sendGoal(goal);
-    }
-
-  }
-  else
-  {
-    joy_vel_command_.setZero();
-    gripper_command_ =  STOP;
-  }
+    // haptic_vel_command_.tail(3) = ang_command;
 }
+
+void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg)
+{
+  // double max_lin_vel = 0.1;
+  double max_ang_vel = 0.3;
+
+    Eigen::Vector3d ang_command;
+    ang_command.setZero();
+    // if(fabs(msg->angular.x) > 0.0) ang_command(0) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.x));
+    // if(fabs(msg->angular.y) > 0.0) ang_command(1) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.y));
+    if(fabs(msg->angular.z) > 0.0) ang_command(2) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.z));
+
+    haptic_vel_command_.tail(3) = ang_command;
+}
+
+void jh_controller::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg)
+{
+  if(pre_button_state == 0)
+  {
+    if(msg->data[0] == 1)
+    {
+      if(gripper_command_ == OPEN)
+      {
+        gripper_ac_close_.waitForServer();  
+        franka_gripper::GraspGoal goal;
+        goal.speed = 0.1;
+        goal.force = 0.01;
+        goal.epsilon.inner = 0.001;
+        goal.epsilon.outer = 7.;
+        gripper_ac_close_.sendGoal(goal);
+        gripper_command_ = CLOSE; 
+      }
+      else if(gripper_command_ == CLOSE)
+      {
+        gripper_ac_open_.waitForServer();  
+        franka_gripper::MoveGoal goal;
+        goal.speed = 0.1;
+        goal.width = 0.08;
+        gripper_ac_open_.sendGoal(goal);
+        gripper_command_ = OPEN;
+      }
+    }
+  }
+  pre_button_state = msg->data[0];
+}
+
+
 // ------------------------------------------------------------------------------------------------
 
 

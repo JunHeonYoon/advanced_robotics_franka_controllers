@@ -19,7 +19,8 @@
 #include <ros/time.h>
 #include <realtime_tools/realtime_publisher.h>
 #include <geometry_msgs/Twist.h>
-#include <sensor_msgs/Joy.h>
+#include <geometry_msgs/PoseStamped.h>
+#include "std_msgs/Int8MultiArray.h"
 #include <Eigen/Dense>
 
 #include "advanced_robotics_franka_controllers/QP_controller.h"
@@ -113,11 +114,15 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   bool qp_controller_thread_enabled_ = false;
   bool tmp_use = false;
 
-  ros::Subscriber joy_sub_;
-  Eigen::Matrix<double, 6, 1> joy_vel_command_; // Linear and Angular velocity
-  enum GRIPPER_MODE{STOP, OPEN, CLOSE};
-  GRIPPER_MODE gripper_command_{STOP};
+  ros::Subscriber haptic_pose_sub_;
+  ros::Subscriber haptic_twist_sub_;
+  ros::Subscriber haptic_button_sub_;
+  Eigen::Matrix<double, 6, 1> haptic_vel_command_; // Linear and Angular velocity
+  
+  int pre_button_state{0};
 
+  enum GRIPPER_MODE{OPEN, CLOSE};
+  GRIPPER_MODE gripper_command_{OPEN};
   actionlib::SimpleActionClient<franka_gripper::GraspAction> gripper_ac_close_
   {"/franka_gripper/grasp", true};
   actionlib::SimpleActionClient<franka_gripper::MoveAction> gripper_ac_open_
@@ -125,9 +130,9 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   actionlib::SimpleActionClient<franka_gripper::HomingAction> gripper_ac_homing_
   {"/franka_gripper/homing", true};
 
-  double gripper_width_;
-
-  void joyCallback(const sensor_msgs::Joy::ConstPtr& msg);
+  void hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+  void hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg);
+  void hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg);
 
   void printState();
   void moveJointPosition(const Eigen::Matrix<double, 7, 1> & target_q, double duration);

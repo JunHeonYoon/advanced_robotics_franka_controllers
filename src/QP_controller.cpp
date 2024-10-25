@@ -110,21 +110,21 @@ namespace QP_CONTROLLER
         qdot_lower_(5) *= 0.5;
         qdot_lower_(6) *= 0.5;
 
-        qddot_upper_(0) *= 0.3;
-        qddot_upper_(1) *= 0.3;
-        qddot_upper_(2) *= 0.3;
-        qddot_upper_(3) *= 0.3;
-        qddot_upper_(4) *= 0.3;
-        qddot_upper_(5) *= 0.3;
-        qddot_upper_(6) *= 0.3;
+        qddot_upper_(0) *= 0.1;
+        qddot_upper_(1) *= 0.1;
+        qddot_upper_(2) *= 0.1;
+        qddot_upper_(3) *= 0.1;
+        qddot_upper_(4) *= 0.1;
+        qddot_upper_(5) *= 0.1;
+        qddot_upper_(6) *= 0.1;
 
-        qddot_lower_(0) *= 0.3;
-        qddot_lower_(1) *= 0.3;
-        qddot_lower_(2) *= 0.3;
-        qddot_lower_(3) *= 0.3;
-        qddot_lower_(4) *= 0.3;
-        qddot_lower_(5) *= 0.3;
-        qddot_lower_(6) *= 0.3;
+        qddot_lower_(0) *= 0.1;
+        qddot_lower_(1) *= 0.1;
+        qddot_lower_(2) *= 0.1;
+        qddot_lower_(3) *= 0.1;
+        qddot_lower_(4) *= 0.1;
+        qddot_lower_(5) *= 0.1;
+        qddot_lower_(6) *= 0.1;
     }
 
     void QP::setWeightMatrix(const std::string &file_path)
