@@ -388,7 +388,6 @@ void jh_controller::modeChangeReaderProc()
 void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
   double max_lin_vel = 0.1;
-  // double max_ang_vel = 0.5;
 
     Eigen::Vector3d lin_command;
     lin_command.setZero();
@@ -396,19 +395,12 @@ void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPt
     if(fabs(msg->pose.position.y) > 0.01) lin_command(1) = std::min(max_lin_vel, std::max(-max_lin_vel, -msg->pose.position.y));
     if(fabs(msg->pose.position.z) > 0.01) lin_command(2) = std::min(max_lin_vel, std::max(-max_lin_vel, msg->pose.position.z));
 
-    haptic_vel_command_.head(3) = lin_command;
-    
-    // Eigen::Vector3d ang_command;
-    // ang_command(0) = 0.0; // roll
-    // ang_command(1) = 0.0; // pitch
-    // ang_command(2) = 0.0;; // yaw
-
-    // haptic_vel_command_.tail(3) = ang_command;
+    // haptic_vel_command_.head(3) = lin_command;
+    haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
 }
 
 void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg)
 {
-  // double max_lin_vel = 0.1;
   double max_ang_vel = 0.3;
 
     Eigen::Vector3d ang_command;
@@ -417,7 +409,8 @@ void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& ms
     // if(fabs(msg->angular.y) > 0.0) ang_command(1) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.y));
     if(fabs(msg->angular.z) > 0.0) ang_command(2) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.z));
 
-    haptic_vel_command_.tail(3) = ang_command;
+    // haptic_vel_command_.tail(3) = ang_command;
+    haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
 void jh_controller::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg)
@@ -449,6 +442,15 @@ void jh_controller::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPt
     }
   }
   pre_button_state = msg->data[0];
+}
+
+Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq)
+{
+
+  double rc = 1. / (cutoff_freq * 2 * M_PI);
+  double dt = 1. / sampling_freq;
+  double a = dt / (rc + dt);
+  return prev_res + a * (input - prev_res);
 }
 
 

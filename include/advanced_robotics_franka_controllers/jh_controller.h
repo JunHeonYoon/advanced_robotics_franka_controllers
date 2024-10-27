@@ -134,6 +134,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   void hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg);
   void hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg);
 
+  Eigen::MatrixXd LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq);
+
   void printState();
   void moveJointPosition(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
   
