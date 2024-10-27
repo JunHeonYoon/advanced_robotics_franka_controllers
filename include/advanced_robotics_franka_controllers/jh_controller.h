@@ -1,3 +1,5 @@
+#ifndef JH_CONTROLLER_H
+#define JH_CONTROLLER_H
 
 #pragma once
 
@@ -149,3 +151,5 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 };
 
 }  // namespace advanced_robotics_franka_controllers
+
+#endif

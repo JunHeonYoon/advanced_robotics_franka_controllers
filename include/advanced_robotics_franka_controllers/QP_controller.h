@@ -9,6 +9,7 @@
 #include "OsqpEigen/OsqpEigen.h"
 
 #include "advanced_robotics_franka_controllers/robot_model.h"
+#include "suhan_benchmark.h"
 
 using json = nlohmann::json;
 static const std::string pkg_path =  std::string(BUILD_DIRECTORY) + "/";
@@ -28,6 +29,14 @@ namespace QP_CONTROLLER
         INVALID_SETTINGS,
         NAN_HESSIAN,
         NON_PD_HESSIAN
+    };
+
+    struct TimeDuration
+    {
+        double set_qp;
+        double set_solver;
+        double solve_qp;
+        void setZero(){set_qp=0; set_solver=0; solve_qp=0;}
     };
     
     struct QPIndex
@@ -75,7 +84,7 @@ namespace QP_CONTROLLER
             {
                 xdot_desired_ = xdot_desired;
             }
-            bool solveQP(Eigen::Matrix<double, 7, 1> &opt_qdot);
+            bool solveQP(Eigen::Matrix<double, 7, 1> &opt_qdot, TimeDuration &time_status);
 
         private:
             Eigen::Matrix<double, 7, 1> q_current_;

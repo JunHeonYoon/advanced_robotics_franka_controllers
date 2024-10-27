@@ -78,21 +78,21 @@ namespace QP_CONTROLLER
         qddot_lower_(5) = jsonBounds["ddq6l"];
         qddot_lower_(6) = jsonBounds["ddq7l"];
 
-        q_upper_(0) *= 0.9;
-        q_upper_(1) *= 0.9;
-        q_upper_(2) *= 0.9;
-        q_upper_(3) *= 0.9;
-        q_upper_(4) *= 0.9;
-        q_upper_(5) *= 0.9;
-        q_upper_(6) *= 0.9;
+        q_upper_(0) *= 1.0;
+        q_upper_(1) *= 1.0;
+        q_upper_(2) *= 1.0;
+        q_upper_(3) *= 1.0;
+        q_upper_(4) *= 1.0;
+        q_upper_(5) *= 1.0;
+        q_upper_(6) *= 1.0;
 
-        q_lower_(0) *= 0.9;
-        q_lower_(1) *= 0.9;
-        q_lower_(2) *= 0.9;
-        q_lower_(3) *= 0.9;
-        q_lower_(4) *= 0.9;
-        q_lower_(5) *= 0.9;
-        q_lower_(6) *= 0.9;
+        q_lower_(0) *= 1.0;
+        q_lower_(1) *= 1.0;
+        q_lower_(2) *= 1.0;
+        q_lower_(3) *= 1.0;
+        q_lower_(4) *= 1.0;
+        q_lower_(5) *= 1.0;
+        q_lower_(6) *= 1.0;
 
         qdot_upper_(0) *= 0.5;
         qdot_upper_(1) *= 0.5;
@@ -151,8 +151,11 @@ namespace QP_CONTROLLER
         mani_weight_ = jsonWeight["mani"];
     }
 
-    bool QP::solveQP(Eigen::Matrix<double, 7, 1> &opt_qdot)
+    bool QP::solveQP(Eigen::Matrix<double, 7, 1> &opt_qdot, TimeDuration &time_status)
     {
+        time_status.setZero();
+        SuhanBenchmark timer;
+
         Eigen::Matrix<double, nx, nx> P_ds;
         P_ds.setZero();
         P_ds.block(si_index.s1, si_index.s1, ns, ns) = 2.0 * slack_weight_;
@@ -183,6 +186,8 @@ namespace QP_CONTROLLER
         u_ds.block(si_index.con_q, 0, nq, 1) = hz_ * (q_upper_ - q_current_);
         u_ds.block(si_index.con_qdot, 0, nq, 1) = qdot_upper_;
         u_ds.block(si_index.con_qddot, 0, nq, 1) = qddot_upper_ / hz_ + qdot_current_;
+
+        time_status.set_qp = timer.elapsedAndReset();
         
         /* 
         min   1/2 x' P x + q' x
@@ -213,8 +218,8 @@ namespace QP_CONTROLLER
 
         // settings
         solver_.settings()->setWarmStart(false);
-        solver_.settings()->getSettings()->eps_abs = 1e-4;
-        solver_.settings()->getSettings()->eps_rel = 1e-5;
+        // solver_.settings()->getSettings()->eps_abs = 1e-4;
+        // solver_.settings()->getSettings()->eps_rel = 1e-5;
         solver_.settings()->getSettings()->verbose = false;
 
         // set the initial data of the QP solver
@@ -235,8 +240,12 @@ namespace QP_CONTROLLER
         if (solver_.getStatus() != OsqpEigen::Status::Solved) return false;
         // if (solver_.getStatus() != OsqpEigen::Status::Solved && solver_.getStatus() != OsqpEigen::Status::SolvedInaccurate) return false;
 
+        time_status.set_solver = timer.elapsedAndReset();
+
         auto sol = solver_.getSolution();
         opt_qdot = sol.segment(si_index.q1, nq);
+
+        time_status.solve_qp = timer.elapsedAndReset();
 
         solver_.clearSolverVariables();
         solver_.clearSolver();

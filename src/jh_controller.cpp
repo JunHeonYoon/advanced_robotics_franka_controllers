@@ -109,7 +109,7 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   qdot_desired_.setZero();
 
   qp_controller_ = std::make_unique<QP_CONTROLLER::QP>();
-  // async_qp_controller_thread_ = std::thread(&jh_controller::asyncQPControllerProc, this);
+  async_qp_controller_thread_ = std::thread(&jh_controller::asyncQPControllerProc, this);
 
   haptic_pose_sub_ = node_handle.subscribe<geometry_msgs::PoseStamped>("/haptic/pose", 1, &jh_controller::hapticPoseCallback, this);
   haptic_twist_sub_ = node_handle.subscribe<geometry_msgs::Twist>("/haptic/twist", 1, &jh_controller::hapticTwistCallback, this);
@@ -271,19 +271,20 @@ void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desir
 
 void jh_controller::asyncQPControllerProc()
 {
-  // SuhanBenchmark timer;
-  // while(!quit_all_proc_)
-  // {
-    // if(qp_controller_thread_enabled_)
-    // {
-    //   qp_controller_input_mutex_.lock();
-    // timer.reset();
+  SuhanBenchmark timer;
+  while(!quit_all_proc_)
+  {
+    if(qp_controller_thread_enabled_)
+    {
+      timer.reset();
+      qp_controller_input_mutex_.lock();
       qp_controller_->setCurrentState(q_, qdot_, j_);
       qp_controller_->setDesiredEEVel(haptic_vel_command_);
-      // qp_controller_input_mutex_.unlock();
+      qp_controller_input_mutex_.unlock();
 
       Eigen::Matrix<double, 7, 1> opt_qdot;
-      bool status = qp_controller_->solveQP(opt_qdot);
+      QP_CONTROLLER::TimeDuration time_status;
+      bool status = qp_controller_->solveQP(opt_qdot, time_status);
       if(status)
       {
         // ROS_INFO("QP solved!!!");
@@ -297,10 +298,17 @@ void jh_controller::asyncQPControllerProc()
         ROS_INFO("QP did not solved!!!");
         qdot_desired_ = opt_qdot;
       }
-    // }
-    // double elapsed_time = timer.elapsedAndReset();
-    // if(print_rate_trigger_()) std::cout << "hz: " << 1. / elapsed_time << std::endl;
-  // }
+      double elapsed_time = timer.elapsedAndReset();
+      if(print_rate_trigger_())
+      {
+        std::cout << "qp controller hz: " << 1. / elapsed_time << std::endl;
+        std::cout << "qp set_qp  hz   : " << 1. / time_status.set_qp << std::endl;
+        std::cout << "qp set_solver hz: " << 1. / time_status.set_solver << std::endl;
+        std::cout << "qp solve_qp hz  : " << 1. / time_status.solve_qp << std::endl;
+
+      }
+    }
+  }
 }
 
 
@@ -339,7 +347,7 @@ void jh_controller::asyncCalculationProc()
       if(tmp_use)
       {
         tmp_use = false;
-        asyncQPControllerProc();
+        // asyncQPControllerProc();
       }
       q_desired_ = q_ + qdot_desired_ / hz_;
       
@@ -356,7 +364,7 @@ void jh_controller::asyncCalculationProc()
     }
     calculation_mutex_.unlock();
     double elapsed_time = bench_timer_.elapsedAndReset();
-    // std::cout << "elapsed_time: " << elapsed_time*1000.0 << std::endl;
+    if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
   }
 
 void jh_controller::modeChangeReaderProc()
@@ -395,8 +403,8 @@ void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPt
     if(fabs(msg->pose.position.y) > 0.01) lin_command(1) = std::min(max_lin_vel, std::max(-max_lin_vel, -msg->pose.position.y));
     if(fabs(msg->pose.position.z) > 0.01) lin_command(2) = std::min(max_lin_vel, std::max(-max_lin_vel, msg->pose.position.z));
 
-    // haptic_vel_command_.head(3) = lin_command;
-    haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
+    haptic_vel_command_.head(3) = lin_command;
+    // haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
 }
 
 void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg)
@@ -409,7 +417,7 @@ void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& ms
     // if(fabs(msg->angular.y) > 0.0) ang_command(1) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.y));
     if(fabs(msg->angular.z) > 0.0) ang_command(2) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.z));
 
-    // haptic_vel_command_.tail(3) = ang_command;
+    haptic_vel_command_.tail(3) = ang_command;
     haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
