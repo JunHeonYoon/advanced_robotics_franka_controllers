@@ -13,24 +13,27 @@ INCLUDE(cmake/FindRBDL.cmake)
 
 add_definitions(-DBUILD_DIRECTORY=\"${CMAKE_SOURCE_DIR}\")
 
-
 find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  dynamic_reconfigure
-  franka_hw
-  franka_gripper
-  geometry_msgs
-  hardware_interface
-  pluginlib
-  realtime_tools
-  roscpp
-  rospy
-  roslib
+roscpp
+dynamic_reconfigure
+franka_hw
+franka_gripper
+geometry_msgs
+hardware_interface
+pluginlib
+realtime_tools
+roscpp
+rospy
+roslib
+tf2
+tf2_ros
 )
 
 find_package(Eigen3 REQUIRED)
 find_package(Franka 0.5.0 REQUIRED)
 find_package(OsqpEigen REQUIRED)
+find_package(FCL REQUIRED)
+link_directories(${FCL_LIBRARY_DIRS})
 
 catkin_package(
   LIBRARIES ${PROJECT_NAME}
@@ -44,6 +47,8 @@ catkin_package(
     pluginlib
     realtime_tools
     roscpp
+    tf2 
+    tf2_ros
   DEPENDS Franka
 )
 
@@ -57,6 +62,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
   ${Franka_INCLUDE_DIRS}
+  ${FCL_INCLUDE_DIRS}
 )
 
 
@@ -113,6 +119,7 @@ src/torque_joint_space_controller_joint_test.cpp
 src/position_joint_space_controller_joint_test.cpp
 src/velocity_joint_space_controller.cpp
 src/QP_controller.cpp
+src/fcl_model.cpp
 )
 
 add_dependencies(advanced_robotics_franka_controllers
@@ -128,8 +135,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   ${catkin_LIBRARIES}
   ${RBDL_LIBRARY}
   OsqpEigen::OsqpEigen
-
-
+  fcl
 )
 #############
 ## Install ##

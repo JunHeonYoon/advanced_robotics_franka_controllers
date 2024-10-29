@@ -10,6 +10,9 @@
 
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>eigen</build_depend>
+  <build_depend>fcl</build_depend>
+  <build_depend>tf2</build_depend>
+  <build_depend>tf2_ros</build_depend>	
 
   <depend>controller_interface</depend>
   <depend>dynamic_reconfigure</depend>
@@ -27,7 +30,9 @@
   <exec_depend>message_runtime</exec_depend>
   <exec_depend>panda_moveit_config</exec_depend>
   <exec_depend>rospy</exec_depend>
-
+  <exec_depend>fcl</exec_depend>
+  <exec_depend>tf2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

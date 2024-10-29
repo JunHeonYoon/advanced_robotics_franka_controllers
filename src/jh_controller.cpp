@@ -105,11 +105,19 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   }
 
   mode_change_thread_ = std::thread(&jh_controller::modeChangeReaderProc, this);
+  control_mode_pub_ = node_handle.advertise<std_msgs::Int32>("/franka_state_controller/control_mode",1);
+  
   q_desired_.setZero();
   qdot_desired_.setZero();
 
+  EE_pose_pub_ = node_handle.advertise<geometry_msgs::PoseStamped>("/franka_state_controller/ee_pose",1);
+  joint_pub_ = node_handle.advertise<sensor_msgs::JointState>("/franka_state_controller/joint_state_jh",1);
+
   qp_controller_ = std::make_unique<QP_CONTROLLER::QP>();
   async_qp_controller_thread_ = std::thread(&jh_controller::asyncQPControllerProc, this);
+
+  fcl_calculator_ = std::make_unique<FCLModel>(node_handle);
+  async_fcl_thread_ = std::thread(&jh_controller::asyncFCLProc, this);
 
   haptic_pose_sub_ = node_handle.subscribe<geometry_msgs::PoseStamped>("/haptic/pose", 1, &jh_controller::hapticPoseCallback, this);
   haptic_twist_sub_ = node_handle.subscribe<geometry_msgs::Twist>("/haptic/twist", 1, &jh_controller::hapticTwistCallback, this);
@@ -172,7 +180,6 @@ void jh_controller::update(const ros::Time& time, const ros::Duration& period)
 
   jh_controller::printState();
   jh_controller::setDesiredJointVel(qdot_desired_);
-  tmp_use = true;
 }
 
 void jh_controller::stopping(const ros::Time & /*time*/)
@@ -203,11 +210,14 @@ void jh_controller::printState()
 		std::cout << std::fixed << std::setprecision(3) << rotation_ << std::endl;
     std::cout << "J        :\t" << std::endl;
 		std::cout << std::fixed << std::setprecision(3) << j_ << std::endl;
+    std::cout << "Mani     : " << std::fixed << std::setprecision(3) << sqrt((j_*j_.transpose()).determinant()) << std::endl;
     std::cout << "haptic command :\t";
 		std::cout << std::fixed << std::setprecision(3) << haptic_vel_command_.transpose() << std::endl;
     std::cout << "gripper mode   :\t";
 		if(gripper_command_ == OPEN) std::cout << "OPEN" << std::endl;
 		else if(gripper_command_ == CLOSE) std::cout << "CLOSE" << std::endl;
+    std::cout << "Minimum dist (cm): " << std::fixed << std::setprecision(3) << min_dist_*100. << std::endl;
+    std::cout << "Minimum dist pair: " << min_dist_pair_.first << ", " << min_dist_pair_.second << std::endl;
 
     std::cout << "-------------------------------------------------------------------\n\n" << std::endl;
   }
@@ -242,12 +252,12 @@ void jh_controller::getCurrentState()
   // const std::array<double, 7> &coriolis_array = model_handle_->getCoriolis();
 
 
-  // q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
-  // qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
-  for (size_t i = 0; i < 7; ++i) {
-    q_(i) = joint_handles_[i].getPosition();
-    qdot_(i) = joint_handles_[i].getVelocity();
-  }
+  q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
+  qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
+  // for (size_t i = 0; i < 7; ++i) {
+  //   q_(i) = joint_handles_[i].getPosition();
+  //   qdot_(i) = joint_handles_[i].getVelocity();
+  // }
   // torque_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
   // g_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(gravity_array.data());
   // m_ = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(massmatrix_array.data());
@@ -260,13 +270,59 @@ void jh_controller::getCurrentState()
   x_ = transform_.translation();
   rotation_ = transform_.rotation();
   x_dot_ = j_ * qdot_;
+  
+  if(state_pub_trigger_())
+  {
+    geometry_msgs::PoseStamped ee_pose_msg;
+    // ee_pose_msg.header.frame_id = "base";
+    ee_pose_msg.header.stamp = ros::Time::now();
+    Eigen::Quaterniond q(rotation_);
+    ee_pose_msg.pose.position.x = x_(0);
+    ee_pose_msg.pose.position.y = x_(1);
+    ee_pose_msg.pose.position.z = x_(2);
+    ee_pose_msg.pose.orientation.x = q.x();
+    ee_pose_msg.pose.orientation.y = q.y();
+    ee_pose_msg.pose.orientation.z = q.z();
+    ee_pose_msg.pose.orientation.w = q.w();
+    EE_pose_pub_.publish(ee_pose_msg);
+
+    sensor_msgs::JointState joint_msg;
+    // joint_msg.header.frame_id = "base";
+    joint_msg.header.stamp = ros::Time::now();
+    joint_msg.name.resize(7);
+    joint_msg.position.resize(7);
+    joint_msg.velocity.resize(7);
+    joint_msg.effort.resize(7);
+    for(size_t i=0; i<7; i++)
+    {
+      joint_msg.name[i] = "panda_" + std::to_string(i+1);
+      joint_msg.position[i] = q_(i);
+      joint_msg.velocity[i] = qdot_(i);
+      joint_msg.effort[i] = 0.0;
+    }
+    joint_pub_.publish(joint_msg);
+  }
 }
 
 void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desired_qdot)
 {
-  for (size_t i = 0; i < 7; ++i) {
-    joint_handles_[i].setCommand(desired_qdot(i));
-  }
+  // if(min_dist_*100. < 0.)
+  // {
+  //   ROS_WARN("Minimum distance between links (%.2f cm) lower than 0 cm!", min_dist_*100.);
+  //   for (size_t i = 0; i < 7; ++i) 
+  //   {
+  //     joint_handles_[i].setCommand(0.0);
+  //   }
+  // }
+  // else
+  // {
+
+    Eigen::Matrix<double, 7, 1> lpf_command = LowPassFilter(desired_qdot, qdot_, hz_, 100.0);
+    for (size_t i = 0; i < 7; ++i) 
+    {
+      joint_handles_[i].setCommand(lpf_command(i));
+    }
+  // }
 }
 
 void jh_controller::asyncQPControllerProc()
@@ -274,7 +330,7 @@ void jh_controller::asyncQPControllerProc()
   SuhanBenchmark timer;
   while(!quit_all_proc_)
   {
-    if(qp_controller_thread_enabled_)
+    if(qp_controller_thread_enabled_ == true && qp_controller_trigger_())
     {
       timer.reset();
       qp_controller_input_mutex_.lock();
@@ -311,6 +367,13 @@ void jh_controller::asyncQPControllerProc()
   }
 }
 
+void jh_controller::asyncFCLProc()
+{
+  while(!quit_all_proc_)
+  {
+    fcl_calculator_->getMinDistance(min_dist_pair_, min_dist_);
+  }
+}
 
 void jh_controller::asyncCalculationProc()
   {
@@ -331,9 +394,14 @@ void jh_controller::asyncCalculationProc()
       if(control_mode_ == TELEOPERATE) 
       {
         qp_controller_thread_enabled_ = true;
+        // is_haptic_first_ = true;
       }
       else qp_controller_thread_enabled_ = false;
       qp_controller_input_mutex_.unlock();
+
+      std_msgs::Int32 msg;
+      msg.data = control_mode_;
+      control_mode_pub_.publish(msg);
     }
 
     if(control_mode_ == HOME)
@@ -344,14 +412,7 @@ void jh_controller::asyncCalculationProc()
     }
     else if(control_mode_ == TELEOPERATE)
     {
-      if(tmp_use)
-      {
-        tmp_use = false;
-        // asyncQPControllerProc();
-      }
       q_desired_ = q_ + qdot_desired_ / hz_;
-      
-
     }
     else
     {
@@ -364,7 +425,7 @@ void jh_controller::asyncCalculationProc()
     }
     calculation_mutex_.unlock();
     double elapsed_time = bench_timer_.elapsedAndReset();
-    if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
+    // if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
   }
 
 void jh_controller::modeChangeReaderProc()
@@ -383,28 +444,97 @@ void jh_controller::modeChangeReaderProc()
           case 't':
             jh_controller::setMode(TELEOPERATE);
             break;
+          case ' ':
+            if(gripper_command_ == OPEN)
+            {
+              gripper_ac_close_.waitForServer();  
+              franka_gripper::GraspGoal goal;
+              goal.speed = 0.1;
+              goal.force = 0.01;
+              goal.epsilon.inner = 0.001;
+              goal.epsilon.outer = 7.;
+              gripper_ac_close_.sendGoal(goal);
+              gripper_command_ = CLOSE; 
+            }
+            else if(gripper_command_ == CLOSE)
+            {
+              gripper_ac_open_.waitForServer();  
+              franka_gripper::MoveGoal goal;
+              goal.speed = 0.1;
+              goal.width = 0.08;
+              gripper_ac_open_.sendGoal(goal);
+              gripper_command_ = OPEN;
+            }
+            break; 
           default:
             jh_controller::setMode(NONE);
             break;
         }
         calculation_mutex_.unlock();
       }
-      
     }
 }
 
 void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
   double max_lin_vel = 0.1;
+  double max_ang_vel = 0.1;
 
-    Eigen::Vector3d lin_command;
-    lin_command.setZero();
-    if(fabs(msg->pose.position.x) > 0.01) lin_command(0) = std::min(max_lin_vel, std::max(-max_lin_vel, -msg->pose.position.x));
-    if(fabs(msg->pose.position.y) > 0.01) lin_command(1) = std::min(max_lin_vel, std::max(-max_lin_vel, -msg->pose.position.y));
-    if(fabs(msg->pose.position.z) > 0.01) lin_command(2) = std::min(max_lin_vel, std::max(-max_lin_vel, msg->pose.position.z));
+  Eigen::Matrix3d offset_R;
+  offset_R << -1.0,  0.0, 0.0,
+               0.0, -1.0, 0.0,
+               0.0,  0.0, 1.0;
 
-    haptic_vel_command_.head(3) = lin_command;
-    // haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
+  Eigen::Vector3d P(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
+  Eigen::Quaterniond q(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+  Eigen::Matrix3d R = q.normalized().toRotationMatrix();
+
+  P = offset_R * P;
+  // R = offset_R * R;
+
+  Eigen::Vector3d lin_command;
+  lin_command.setZero(); 
+  if(P.norm() > 0.01)
+  {
+    double gain = (2.5 - 1.0) / (0.05 - 0.01) * (P.norm() - 0.01) + 1.0;
+    lin_command = gain * P;
+  }
+  if(lin_command.norm() > max_lin_vel)
+  {
+    lin_command = max_lin_vel * lin_command.normalized();
+  }
+
+  // if(is_haptic_first_)
+  // {
+  //   init_haptic_R_ = R;
+  //   is_haptic_first_ = false;
+  // }
+  Eigen::Vector3d ang_command;
+  ang_command.setZero();
+  if(button_state_ == 1)
+  {
+    if(pre_button_state_ == 0)
+    {
+      init_haptic_R_ = R;
+      // is_haptic_first_ = false;
+      rotation_init_ = rotation_;
+    }
+    Eigen::Vector3d phi = DyrosMath::getPhi(R*init_haptic_R_.transpose(), rotation_*rotation_init_.transpose());
+    if(phi.norm() > 0.01)
+    {
+      ang_command = 1.0 * phi;
+    }
+    else if(ang_command.norm() > max_ang_vel)
+    {
+      ang_command = max_ang_vel * ang_command.normalized();
+    }
+  }
+  pre_button_state_ = button_state_;
+
+
+  // haptic_vel_command_.head(3) = lin_command;
+  haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
+  haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
 void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg)
@@ -413,43 +543,44 @@ void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& ms
 
     Eigen::Vector3d ang_command;
     ang_command.setZero();
-    // if(fabs(msg->angular.x) > 0.0) ang_command(0) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.x));
-    // if(fabs(msg->angular.y) > 0.0) ang_command(1) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.y));
+    if(fabs(msg->angular.x) > 0.0) ang_command(0) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.x));
+    if(fabs(msg->angular.y) > 0.0) ang_command(1) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.y));
     if(fabs(msg->angular.z) > 0.0) ang_command(2) = std::min(max_ang_vel, std::max(-max_ang_vel, msg->angular.z));
 
-    haptic_vel_command_.tail(3) = ang_command;
-    haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
+    // haptic_vel_command_.tail(3) = ang_command;
+    // haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
 void jh_controller::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg)
 {
-  if(pre_button_state == 0)
-  {
-    if(msg->data[0] == 1)
-    {
-      if(gripper_command_ == OPEN)
-      {
-        gripper_ac_close_.waitForServer();  
-        franka_gripper::GraspGoal goal;
-        goal.speed = 0.1;
-        goal.force = 0.01;
-        goal.epsilon.inner = 0.001;
-        goal.epsilon.outer = 7.;
-        gripper_ac_close_.sendGoal(goal);
-        gripper_command_ = CLOSE; 
-      }
-      else if(gripper_command_ == CLOSE)
-      {
-        gripper_ac_open_.waitForServer();  
-        franka_gripper::MoveGoal goal;
-        goal.speed = 0.1;
-        goal.width = 0.08;
-        gripper_ac_open_.sendGoal(goal);
-        gripper_command_ = OPEN;
-      }
-    }
-  }
-  pre_button_state = msg->data[0];
+  button_state_ = msg->data[0];
+  // if(pre_button_state_ == 0)
+  // {
+  //   if(button_state_ == 1)
+  //   {
+  //     if(gripper_command_ == OPEN)
+  //     {
+  //       gripper_ac_close_.waitForServer();  
+  //       franka_gripper::GraspGoal goal;
+  //       goal.speed = 0.1;
+  //       goal.force = 0.01;
+  //       goal.epsilon.inner = 0.001;
+  //       goal.epsilon.outer = 7.;
+  //       gripper_ac_close_.sendGoal(goal);
+  //       gripper_command_ = CLOSE; 
+  //     }
+  //     else if(gripper_command_ == CLOSE)
+  //     {
+  //       gripper_ac_open_.waitForServer();  
+  //       franka_gripper::MoveGoal goal;
+  //       goal.speed = 0.1;
+  //       goal.width = 0.08;
+  //       gripper_ac_open_.sendGoal(goal);
+  //       gripper_command_ = OPEN;
+  //     }
+  //   }
+  // }
+  // pre_button_state_ = button_state_;
 }
 
 Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq)

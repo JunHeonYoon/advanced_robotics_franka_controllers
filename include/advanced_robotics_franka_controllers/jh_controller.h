@@ -2,7 +2,8 @@
 #define JH_CONTROLLER_H
 
 #pragma once
-
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -22,11 +23,16 @@
 #include <realtime_tools/realtime_publisher.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/PoseStamped.h>
-#include "std_msgs/Int8MultiArray.h"
+#include <std_msgs/Int8MultiArray.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Int32.h>
+#include <sensor_msgs/JointState.h>
 #include <Eigen/Dense>
 
 #include "advanced_robotics_franka_controllers/QP_controller.h"
 #include "suhan_benchmark.h"
+#include "advanced_robotics_franka_controllers/fcl_model.h"
+#include "math_type_define.h"
 
 #include <actionlib/client/simple_action_client.h>
 #include <actionlib/client/terminal_state.h>
@@ -54,7 +60,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   std::vector<hardware_interface::JointHandle> joint_handles_;
 
   franka_hw::TriggerRate print_rate_trigger_{10}; 
-  franka_hw::TriggerRate qp_controller_trigger_{1000}; 
+  franka_hw::TriggerRate qp_controller_trigger_{200}; 
+  franka_hw::TriggerRate state_pub_trigger_{100}; 
 	
   // initial state
   Eigen::Matrix<double, 7, 1> q_init_;
@@ -100,11 +107,16 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Time control_start_time_;
   SuhanBenchmark bench_timer_;
 
+  ros::Publisher EE_pose_pub_;
+  ros::Publisher joint_pub_;
+
   enum CTRL_MODE{NONE, HOME, TELEOPERATE};
   CTRL_MODE control_mode_{NONE};
 	bool is_mode_changed_ {false};
+  ros::Publisher control_mode_pub_;
 
   std::unique_ptr<QP_CONTROLLER::QP> qp_controller_;
+  std::unique_ptr<FCLModel> fcl_calculator_;
 
   std::mutex calculation_mutex_;
   std::mutex qp_controller_input_mutex_;
@@ -112,16 +124,20 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   bool quit_all_proc_{false};
   std::thread async_calculation_thread_;
   std::thread async_qp_controller_thread_;
+  std::thread async_fcl_thread_;
   std::thread mode_change_thread_;
   bool qp_controller_thread_enabled_ = false;
-  bool tmp_use = false;
 
   ros::Subscriber haptic_pose_sub_;
+  ros::Subscriber haptic_encoder_ori_sub_;
   ros::Subscriber haptic_twist_sub_;
   ros::Subscriber haptic_button_sub_;
   Eigen::Matrix<double, 6, 1> haptic_vel_command_; // Linear and Angular velocity
-  
-  int pre_button_state{0};
+  Eigen::Matrix3d init_haptic_R_;
+  bool is_haptic_first_{false};
+
+  int button_state_;
+  int pre_button_state_{0};
 
   enum GRIPPER_MODE{OPEN, CLOSE};
   GRIPPER_MODE gripper_command_{OPEN};
@@ -132,7 +148,12 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   actionlib::SimpleActionClient<franka_gripper::HomingAction> gripper_ac_homing_
   {"/franka_gripper/homing", true};
 
+  float min_dist_;
+  std::pair<std::string, std::string> min_dist_pair_;
+
+
   void hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+  void hapticEncoderOrientationCallback(const std_msgs::Float32MultiArray::ConstPtr& msg);
   void hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg);
   void hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg);
 
@@ -148,6 +169,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   void modeChangeReaderProc();
   void asyncCalculationProc();
   void asyncQPControllerProc();
+  void asyncFCLProc();
 };
 
 }  // namespace advanced_robotics_franka_controllers

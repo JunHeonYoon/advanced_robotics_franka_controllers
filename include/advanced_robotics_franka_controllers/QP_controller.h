@@ -10,6 +10,7 @@
 
 #include "advanced_robotics_franka_controllers/robot_model.h"
 #include "suhan_benchmark.h"
+#include "math_type_define.h"
 
 using json = nlohmann::json;
 static const std::string pkg_path =  std::string(BUILD_DIRECTORY) + "/";
@@ -77,8 +78,8 @@ namespace QP_CONTROLLER
             {
                 q_current_ = q_current;
                 qdot_current_ = qdot_current;
-                // j_current_ = j_current;
-                j_current_ = robot_model_.getJacobian(q_current_);
+                j_current_ = j_current;
+                // j_current_ = robot_model_.getJacobian(q_current_);
             }
             void setDesiredEEVel(const Eigen::Matrix<double, 6, 1> &xdot_desired)
             {
@@ -92,7 +93,7 @@ namespace QP_CONTROLLER
             Eigen::Matrix<double, 6, 7> j_current_;
             Eigen::Matrix<double, 6, 1> xdot_desired_;
 
-            const double hz_ = 1000.;
+            const double hz_ = 200.;
 
             Eigen::Matrix<double, 7, 1> q_upper_;
             Eigen::Matrix<double, 7, 1> q_lower_;

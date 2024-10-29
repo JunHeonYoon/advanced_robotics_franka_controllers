@@ -18,7 +18,8 @@ public:
     float getDistance(const std::string& link1, const std::string& link2,
                       const geometry_msgs::Transform& relative_tf);
 
-    void updateDistances();
+    void getMinDistance(std::pair<std::string, std::string> &min_dist_pair, float &min_dist);
+    void getMinDistance(float &min_dist);
 
 private:
     std::unordered_map<std::string, std::vector<std::shared_ptr<fcl::CollisionObjectf>>> coll_objects_;

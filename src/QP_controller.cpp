@@ -153,8 +153,8 @@ namespace QP_CONTROLLER
 
     bool QP::solveQP(Eigen::Matrix<double, 7, 1> &opt_qdot, TimeDuration &time_status)
     {
-        time_status.setZero();
         SuhanBenchmark timer;
+        time_status.setZero();
 
         Eigen::Matrix<double, nx, nx> P_ds;
         P_ds.setZero();
@@ -163,7 +163,21 @@ namespace QP_CONTROLLER
 
         Eigen::Matrix<double, nx, 1> q_ds;
         q_ds.setZero();
-        q_ds.block(si_index.q1, 0, nq, 1) = -mani_weight_ * robot_model_.getDManipulability(q_current_);
+        double mani = robot_model_.getManipulability(q_current_);
+        double mani_cubic_weight;
+        if(mani > 0.05) 
+        {
+            mani_cubic_weight = 0.0;
+        }
+        else if(mani < 0.01)
+        {
+            mani_cubic_weight = mani_weight_;
+        }
+        else
+        {
+            mani_cubic_weight = DyrosMath::cubic(mani, 0.01, 0.05, mani_weight_, 0., 0., 0.);
+        }
+        q_ds.block(si_index.q1, 0, nq, 1) = -mani_cubic_weight * robot_model_.getDManipulability(q_current_);
 
         Eigen::Matrix<double, nc, nx> A_ds;
         A_ds.setZero();
@@ -186,8 +200,8 @@ namespace QP_CONTROLLER
         u_ds.block(si_index.con_q, 0, nq, 1) = hz_ * (q_upper_ - q_current_);
         u_ds.block(si_index.con_qdot, 0, nq, 1) = qdot_upper_;
         u_ds.block(si_index.con_qddot, 0, nq, 1) = qddot_upper_ / hz_ + qdot_current_;
-
         time_status.set_qp = timer.elapsedAndReset();
+
         
         /* 
         min   1/2 x' P x + q' x
@@ -218,8 +232,8 @@ namespace QP_CONTROLLER
 
         // settings
         solver_.settings()->setWarmStart(false);
-        // solver_.settings()->getSettings()->eps_abs = 1e-4;
-        // solver_.settings()->getSettings()->eps_rel = 1e-5;
+        solver_.settings()->getSettings()->eps_abs = 1e-4;
+        solver_.settings()->getSettings()->eps_rel = 1e-5;
         solver_.settings()->getSettings()->verbose = false;
 
         // set the initial data of the QP solver
