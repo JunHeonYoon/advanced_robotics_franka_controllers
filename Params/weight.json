@@ -2,17 +2,17 @@
     "slack1": 500.0,
     "slack2": 500.0,
     "slack3": 500.0,
-    "slack4": 500.0,
-    "slack5": 500.0,
-    "slack6": 500.0,
+    "slack4": 10.0,
+    "slack5": 10.0,
+    "slack6": 10.0,
 
-    "damping1": 0.01,
-    "damping2": 0.01,
-    "damping3": 0.01,
-    "damping4": 0.01,
-    "damping5": 0.01,
-    "damping6": 0.01,
-    "damping7": 0.01,
+    "damping1": 0.1,
+    "damping2": 0.1,
+    "damping3": 0.1,
+    "damping4": 0.1,
+    "damping5": 0.1,
+    "damping6": 0.1,
+    "damping7": 0.1,
 
     "mani": 2.0
 

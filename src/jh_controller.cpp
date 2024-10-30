@@ -43,7 +43,7 @@ int kbhit(void)
 
 namespace advanced_robotics_franka_controllers
 {
-// --------------------------- Default controller function -----------------------------------------
+// ---------------------------default controller function-----------------------------------------
 bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle)
 {
 	std::vector<std::string> joint_names;
@@ -120,6 +120,7 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   async_fcl_thread_ = std::thread(&jh_controller::asyncFCLProc, this);
 
   haptic_pose_sub_ = node_handle.subscribe<geometry_msgs::PoseStamped>("/haptic/pose", 1, &jh_controller::hapticPoseCallback, this);
+  haptic_encoder_ori_sub_ = node_handle.subscribe<std_msgs::Float32MultiArray>("/haptic/encoder_orientation", 1, &jh_controller::hapticEncoderOrientationCallback, this);
   haptic_twist_sub_ = node_handle.subscribe<geometry_msgs::Twist>("/haptic/twist", 1, &jh_controller::hapticTwistCallback, this);
   haptic_button_sub_ = node_handle.subscribe<std_msgs::Int8MultiArray>("/haptic/button_state", 1, &jh_controller::hapticButtonCallback, this);
   haptic_vel_command_.setZero();
@@ -188,7 +189,7 @@ void jh_controller::stopping(const ros::Time & /*time*/)
 }
 // ------------------------------------------------------------------------------------------------
 
-// --------------------------- Funciotn from robotics class -----------------------------------------
+// --------------------------- funciotn from robotics class -----------------------------------------
 void jh_controller::printState()
 {
   if (print_rate_trigger_()) 
@@ -233,7 +234,6 @@ void jh_controller::moveJointPosition(const Eigen::Matrix<double, 7, 1> &target_
                                         q_init_(i), target_q(i), 0, 0);
   }
 }
-// ------------------------------------------------------------------------------------------------
 
 // --------------------------- Controller Core Methods -----------------------------------------
 void jh_controller::setMode(const CTRL_MODE & mode)
@@ -252,18 +252,20 @@ void jh_controller::getCurrentState()
   // const std::array<double, 49> &massmatrix_array = model_handle_->getMass();
   // const std::array<double, 7> &coriolis_array = model_handle_->getCoriolis();
 
-
+  // for velocity control, these code did not work!!!
   // q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
   // qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
-  for (size_t i = 0; i < 7; ++i) {
-    q_(i) = joint_handles_[i].getPosition();
-    qdot_(i) = joint_handles_[i].getVelocity();
-  }
   // torque_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
   // g_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(gravity_array.data());
   // m_ = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(massmatrix_array.data());
   // m_inv_ = m_.inverse();
   // c_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(coriolis_array.data());
+
+  for (size_t i = 0; i < 7; ++i) {
+    q_(i) = joint_handles_[i].getPosition();
+    qdot_(i) = joint_handles_[i].getVelocity();
+  }
+
   j_ = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
   j_v_ = j_.block<3, 7>(0, 0);
   j_w_ = j_.block<3, 7>(3, 0);
@@ -275,7 +277,6 @@ void jh_controller::getCurrentState()
   if(state_pub_trigger_())
   {
     geometry_msgs::PoseStamped ee_pose_msg;
-    // ee_pose_msg.header.frame_id = "base";
     ee_pose_msg.header.stamp = ros::Time::now();
     Eigen::Quaterniond q(rotation_);
     ee_pose_msg.pose.position.x = x_(0);
@@ -288,7 +289,6 @@ void jh_controller::getCurrentState()
     EE_pose_pub_.publish(ee_pose_msg);
 
     sensor_msgs::JointState joint_msg;
-    // joint_msg.header.frame_id = "base";
     joint_msg.header.stamp = ros::Time::now();
     joint_msg.name.resize(7);
     joint_msg.position.resize(7);
@@ -322,7 +322,6 @@ void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desir
     for (size_t i = 0; i < 7; ++i) 
     {
       joint_handles_[i].setCommand(lpf_command(i));
-      // joint_handles_[i].setCommand(0.0);
     }
   // }
 }
@@ -357,14 +356,13 @@ void jh_controller::asyncQPControllerProc()
         qdot_desired_ = opt_qdot;
       }
       double elapsed_time = timer.elapsedAndReset();
-      if(print_rate_trigger_())
-      {
-        std::cout << "qp controller hz: " << 1. / elapsed_time << std::endl;
-        std::cout << "qp set_qp  hz   : " << 1. / time_status.set_qp << std::endl;
-        std::cout << "qp set_solver hz: " << 1. / time_status.set_solver << std::endl;
-        std::cout << "qp solve_qp hz  : " << 1. / time_status.solve_qp << std::endl;
-
-      }
+      // if(print_rate_trigger_())
+      // {
+      //   std::cout << "qp controller hz: " << 1. / elapsed_time << std::endl;
+      //   std::cout << "qp set_qp  hz   : " << 1. / time_status.set_qp << std::endl;
+      //   std::cout << "qp set_solver hz: " << 1. / time_status.set_solver << std::endl;
+      //   std::cout << "qp solve_qp hz  : " << 1. / time_status.solve_qp << std::endl;
+      // }
     }
   }
 }
@@ -421,13 +419,13 @@ void jh_controller::asyncCalculationProc()
       for(size_t i=0; i<7;i++)
       {
         qdot_desired_(i) = DyrosMath::cubic(play_time_.toSec(), control_start_time_.toSec(), control_start_time_.toSec() + 3.0,
-                                            qdot_init_(i), 0.0, 0, 0);
+                                            qdot_init_(i), 0.0, 0.0, 0.0);
       }
       q_desired_ = q_ + qdot_desired_ / hz_;
     }
     calculation_mutex_.unlock();
     double elapsed_time = bench_timer_.elapsedAndReset();
-    if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
+    // if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
   }
 
 void jh_controller::modeChangeReaderProc()
@@ -480,7 +478,7 @@ void jh_controller::modeChangeReaderProc()
 void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
   double max_lin_vel = 0.1;
-  double max_ang_vel = 0.1;
+  // double max_ang_vel = 0.1;
 
   Eigen::Matrix3d offset_R;
   offset_R << -1.0,  0.0, 0.0,
@@ -488,8 +486,8 @@ void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPt
                0.0,  0.0, 1.0;
 
   Eigen::Vector3d P(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z);
-  Eigen::Quaterniond q(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
-  Eigen::Matrix3d R = q.normalized().toRotationMatrix();
+  // Eigen::Quaterniond q(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+  // Eigen::Matrix3d R = q.normalized().toRotationMatrix();
 
   P = offset_R * P;
   // R = offset_R * R;
@@ -511,6 +509,41 @@ void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPt
   //   init_haptic_R_ = R;
   //   is_haptic_first_ = false;
   // }
+  // Eigen::Vector3d ang_command;
+  // ang_command.setZero();
+  // if(button_state_ == 1)
+  // {
+  //   if(pre_button_state_ == 0)
+  //   {
+  //     init_haptic_R_ = R;
+  //     // is_haptic_first_ = false;
+  //     rotation_init_ = rotation_;
+  //   }
+  //   Eigen::Vector3d phi = DyrosMath::getPhi(R*init_haptic_R_.transpose(), rotation_*rotation_init_.transpose());
+  //   if(phi.norm() > 0.01)
+  //   {
+  //     ang_command = 1.0 * phi;
+  //   }
+  //   else if(ang_command.norm() > max_ang_vel)
+  //   {
+  //     ang_command = max_ang_vel * ang_command.normalized();
+  //   }
+  // }
+  // pre_button_state_ = button_state_;
+
+
+  haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
+  // haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
+}
+
+void jh_controller::hapticEncoderOrientationCallback(const std_msgs::Float32MultiArray::ConstPtr& msg)
+{
+  double max_ang_vel = 0.5;
+
+  // for pitch, yaw control
+  Eigen::Matrix3d R;
+    R =   Eigen::AngleAxisd(msg->data[2], Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(-msg->data[1], Vector3d::UnitY());
   Eigen::Vector3d ang_command;
   ang_command.setZero();
   if(button_state_ == 1)
@@ -526,16 +559,13 @@ void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPt
     {
       ang_command = 1.0 * phi;
     }
-    else if(ang_command.norm() > max_ang_vel)
+    if(ang_command.norm() > max_ang_vel)
     {
       ang_command = max_ang_vel * ang_command.normalized();
     }
   }
   pre_button_state_ = button_state_;
 
-
-  // haptic_vel_command_.head(3) = lin_command;
-  haptic_vel_command_.head(3) = LowPassFilter(lin_command, haptic_vel_command_.head(3), 1000.0, 1.0);
   haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
@@ -593,6 +623,8 @@ Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const
   double a = dt / (rc + dt);
   return prev_res + a * (input - prev_res);
 }
+
+
 // ------------------------------------------------------------------------------------------------
 
 
