@@ -43,7 +43,7 @@ int kbhit(void)
 
 namespace advanced_robotics_franka_controllers
 {
-// ---------------------------default controller function-----------------------------------------
+// --------------------------- Default controller function -----------------------------------------
 bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle)
 {
 	std::vector<std::string> joint_names;
@@ -188,7 +188,7 @@ void jh_controller::stopping(const ros::Time & /*time*/)
 }
 // ------------------------------------------------------------------------------------------------
 
-// --------------------------- funciotn from robotics class -----------------------------------------
+// --------------------------- Funciotn from robotics class -----------------------------------------
 void jh_controller::printState()
 {
   if (print_rate_trigger_()) 
@@ -233,6 +233,7 @@ void jh_controller::moveJointPosition(const Eigen::Matrix<double, 7, 1> &target_
                                         q_init_(i), target_q(i), 0, 0);
   }
 }
+// ------------------------------------------------------------------------------------------------
 
 // --------------------------- Controller Core Methods -----------------------------------------
 void jh_controller::setMode(const CTRL_MODE & mode)
@@ -252,12 +253,12 @@ void jh_controller::getCurrentState()
   // const std::array<double, 7> &coriolis_array = model_handle_->getCoriolis();
 
 
-  q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
-  qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
-  // for (size_t i = 0; i < 7; ++i) {
-  //   q_(i) = joint_handles_[i].getPosition();
-  //   qdot_(i) = joint_handles_[i].getVelocity();
-  // }
+  // q_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
+  // qdot_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
+  for (size_t i = 0; i < 7; ++i) {
+    q_(i) = joint_handles_[i].getPosition();
+    qdot_(i) = joint_handles_[i].getVelocity();
+  }
   // torque_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
   // g_ = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(gravity_array.data());
   // m_ = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(massmatrix_array.data());
@@ -321,6 +322,7 @@ void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desir
     for (size_t i = 0; i < 7; ++i) 
     {
       joint_handles_[i].setCommand(lpf_command(i));
+      // joint_handles_[i].setCommand(0.0);
     }
   // }
 }
@@ -425,7 +427,7 @@ void jh_controller::asyncCalculationProc()
     }
     calculation_mutex_.unlock();
     double elapsed_time = bench_timer_.elapsedAndReset();
-    // if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
+    if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
   }
 
 void jh_controller::modeChangeReaderProc()
@@ -591,8 +593,6 @@ Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const
   double a = dt / (rc + dt);
   return prev_res + a * (input - prev_res);
 }
-
-
 // ------------------------------------------------------------------------------------------------
 
 
