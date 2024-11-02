@@ -1,0 +1,17 @@
+{
+    "q_error1": 100.0,
+    "q_error2": 100.0,
+    "q_error3": 100.0,
+    "q_error4": 100.0,
+    "q_error5": 100.0,
+    "q_error6": 100.0,
+    "q_error7": 100.0,
+
+    "damping1": 0.1,
+    "damping2": 0.1,
+    "damping3": 0.1,
+    "damping4": 0.1,
+    "damping5": 0.1,
+    "damping6": 0.1,
+    "damping7": 0.1
+}

@@ -2,9 +2,9 @@
     "slack1": 500.0,
     "slack2": 500.0,
     "slack3": 500.0,
-    "slack4": 10.0,
-    "slack5": 10.0,
-    "slack6": 10.0,
+    "slack4": 50.0,
+    "slack5": 50.0,
+    "slack6": 50.0,
 
     "damping1": 0.1,
     "damping2": 0.1,

@@ -32,8 +32,8 @@ tf2_ros
 find_package(Eigen3 REQUIRED)
 find_package(Franka 0.5.0 REQUIRED)
 find_package(OsqpEigen REQUIRED)
-find_package(FCL REQUIRED)
-link_directories(${FCL_LIBRARY_DIRS})
+# find_package(FCL REQUIRED)
+# link_directories(${FCL_LIBRARY_DIRS})
 
 catkin_package(
   LIBRARIES ${PROJECT_NAME}
@@ -62,7 +62,7 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
   ${Franka_INCLUDE_DIRS}
-  ${FCL_INCLUDE_DIRS}
+  # ${FCL_INCLUDE_DIRS}
 )
 
 
@@ -71,6 +71,7 @@ include_directories(
 add_library(${PROJECT_NAME}
 src/default_controller.cpp
 src/jh_controller.cpp
+src/jh_controller_position.cpp
 src/hs_controller.cpp
 src/collision_detection_controller.cpp
 #src/position_joint_space_slam_test_controller.cpp
@@ -118,8 +119,11 @@ src/robot_model.cpp
 src/torque_joint_space_controller_joint_test.cpp
 src/position_joint_space_controller_joint_test.cpp
 src/velocity_joint_space_controller.cpp
-src/QP_controller.cpp
-src/fcl_model.cpp
+# src/QP_controller.cpp
+src/QP_base.cpp
+src/QP_cartesian_velocity.cpp
+src/QP_joint_position.cpp
+# src/fcl_model.cpp
 )
 
 add_dependencies(advanced_robotics_franka_controllers
@@ -135,7 +139,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   ${catkin_LIBRARIES}
   ${RBDL_LIBRARY}
   OsqpEigen::OsqpEigen
-  fcl
+  # fcl
 )
 #############
 ## Install ##

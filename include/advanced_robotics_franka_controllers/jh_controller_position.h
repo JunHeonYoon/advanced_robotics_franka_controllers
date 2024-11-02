@@ -1,6 +1,10 @@
+#ifndef JH_CONTROLLER_POSITION_H
+#define JH_CONTROLLER_POSITION_H
 
 #pragma once
-
+#include <iomanip>
+#include <iostream>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,23 +23,34 @@
 #include <ros/time.h>
 #include <realtime_tools/realtime_publisher.h>
 #include <geometry_msgs/Twist.h>
-#include <sensor_msgs/Joy.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <std_msgs/Int8MultiArray.h>
+#include <std_msgs/Float32MultiArray.h>
+#include <std_msgs/Int32.h>
+#include <sensor_msgs/JointState.h>
 #include <Eigen/Dense>
 
 #include "advanced_robotics_franka_controllers/QP_controller.h"
 #include "suhan_benchmark.h"
+#include "advanced_robotics_franka_controllers/fcl_model.h"
+#include "math_type_define.h"
 
 #include <actionlib/client/simple_action_client.h>
 #include <actionlib/client/terminal_state.h>
 #include <franka_gripper/GraspAction.h>
+#include <franka_gripper/HomingAction.h>
 #include <franka_gripper/MoveAction.h>
+
+#include <fcntl.h>
+#include <termios.h>
 
 
 namespace advanced_robotics_franka_controllers {
 
-class jh_controller : public controller_interface::MultiInterfaceController<
+class jh_controller_position : public controller_interface::MultiInterfaceController<
 								   franka_hw::FrankaModelInterface,
-                   hardware_interface::PositionJointInterface,
+                   hardware_interface::PositionJointInterface,       
+                  //  hardware_interface::VelocityJointInterface,
 								   franka_hw::FrankaStateInterface> {
                      
   bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle) override;
@@ -49,7 +64,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   std::vector<hardware_interface::JointHandle> joint_handles_;
 
   franka_hw::TriggerRate print_rate_trigger_{10}; 
-  franka_hw::TriggerRate qp_controller_trigger_{1000}; 
+  franka_hw::TriggerRate qp_controller_trigger_{200}; 
+  franka_hw::TriggerRate state_pub_trigger_{100}; 
 	
   // initial state
   Eigen::Matrix<double, 7, 1> q_init_;
@@ -58,7 +74,7 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   // current state
   Eigen::Matrix<double, 7, 1> q_;
   Eigen::Matrix<double, 7, 1> qdot_;
-  Eigen::Matrix<double, 7, 1> torque_;
+  // Eigen::Matrix<double, 7, 1> torque_;
 
   // control value
   Eigen::Matrix<double, 7, 1> q_desired_;
@@ -75,10 +91,10 @@ class jh_controller : public controller_interface::MultiInterfaceController<
 	Eigen::Matrix<double, 6, 1> x_error_;
 
   // dynamics
-  Eigen::Matrix<double, 7, 1> g_; // gravity matrix
-  Eigen::Matrix<double, 7, 7> m_; // mass matrix
-  Eigen::Matrix<double, 7, 7> m_inv_; // Inverse of mass matrix
-  Eigen::Matrix<double, 7, 1> c_; // coliolis matrix
+  // Eigen::Matrix<double, 7, 1> g_; // gravity matrix
+  // Eigen::Matrix<double, 7, 7> m_; // mass matrix
+  // Eigen::Matrix<double, 7, 7> m_inv_; // Inverse of mass matrix
+  // Eigen::Matrix<double, 7, 1> c_; // coliolis matrix
 
   // For controller
 	Eigen::Matrix<double, 6, 7> j_;	// Full basic Jacobian matrix
@@ -95,11 +111,16 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Time control_start_time_;
   SuhanBenchmark bench_timer_;
 
-  enum CTRL_MODE{NONE, HOME, TELEOPERATE};
+  ros::Publisher EE_pose_pub_;
+  ros::Publisher joint_pub_;
+
+  enum CTRL_MODE{NONE, HOME, TELEOPERATE, ROS_SUB};
   CTRL_MODE control_mode_{NONE};
 	bool is_mode_changed_ {false};
+  ros::Publisher control_mode_pub_;
 
   std::unique_ptr<QP_CONTROLLER::QP> qp_controller_;
+  std::unique_ptr<FCLModel> fcl_calculator_;
 
   std::mutex calculation_mutex_;
   std::mutex qp_controller_input_mutex_;
@@ -107,25 +128,53 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   bool quit_all_proc_{false};
   std::thread async_calculation_thread_;
   std::thread async_qp_controller_thread_;
+  std::thread async_fcl_thread_;
   std::thread mode_change_thread_;
   bool qp_controller_thread_enabled_ = false;
-  bool tmp_use = false;
 
-  ros::Subscriber joy_sub_;
-  Eigen::Matrix<double, 6, 1> joy_vel_command_; // Linear and Angular velocity
-  enum GRIPPER_MODE{STOP, OPEN, CLOSE};
-  GRIPPER_MODE gripper_command_{STOP};
+  ros::Subscriber haptic_pose_sub_;
+  ros::Subscriber haptic_encoder_ori_sub_;
+  ros::Subscriber haptic_twist_sub_;
+  ros::Subscriber haptic_button_sub_;
+  Eigen::Matrix<double, 6, 1> haptic_vel_command_; // Linear and Angular velocity
+  Eigen::Matrix3d init_haptic_R_;
+  bool is_haptic_first_{false};
 
-  actionlib::SimpleActionClient<franka_gripper::MoveAction> gripper_ac_
+  int button_state_;
+  int pre_button_state_{0};
+
+  enum GRIPPER_MODE{OPEN, CLOSE};
+  GRIPPER_MODE gripper_command_{OPEN};
+  actionlib::SimpleActionClient<franka_gripper::GraspAction> gripper_ac_close_
+  {"/franka_gripper/grasp", true};
+  actionlib::SimpleActionClient<franka_gripper::MoveAction> gripper_ac_open_
   {"/franka_gripper/move", true};
+  actionlib::SimpleActionClient<franka_gripper::HomingAction> gripper_ac_homing_
+  {"/franka_gripper/homing", true};
 
-  double gripper_width_;
+  float min_dist_;
+  std::pair<std::string, std::string> min_dist_pair_;
 
-  void joyCallback(const sensor_msgs::Joy::ConstPtr& msg);
+  ros::Subscriber joint_command_sub_;
+  Eigen::Matrix<double, 7, 1> joint_command_;
+
+  std::ofstream debug_file_;
+
+  void hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+  void hapticEncoderOrientationCallback(const std_msgs::Float32MultiArray::ConstPtr& msg);
+  void hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg);
+  void hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg);
+
+  void jointCommandCallback(const sensor_msgs::JointState::ConstPtr& msg);
+
+  bool tele_z_enable_{true};
+
+  Eigen::MatrixXd LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq);
 
   void printState();
   void moveJointPosition(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
-  
+  int kbhit(void);
+
   void setMode(const CTRL_MODE & mode);
   void getCurrentState();
   void setDesiredJoint(const Eigen::Matrix<double, 7, 1> & desired_q);
@@ -133,6 +182,9 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   void modeChangeReaderProc();
   void asyncCalculationProc();
   void asyncQPControllerProc();
+  void asyncFCLProc();
 };
 
 }  // namespace advanced_robotics_franka_controllers
+
+#endif

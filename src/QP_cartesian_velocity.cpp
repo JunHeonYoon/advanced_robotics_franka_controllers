@@ -1,9 +1,12 @@
-#include "advanced_robotics_franka_controllers/QP_controller.h"
+#include "advanced_robotics_franka_controllers/QP_cartesian_velocity.h"
 
-namespace QP_CONTROLLER
+namespace QP
 {
-    QP::QP()
+    CartesianVelocity::CartesianVelocity()
+    :Base()
     {
+        Base::setQPsize(ns_ + nq_, ns_ + nq_ * 3);
+
         q_upper_.setZero();
         q_lower_.setZero();
         qdot_upper_.setZero();
@@ -13,18 +16,28 @@ namespace QP_CONTROLLER
         slack_weight_.setZero();
         damping_weight_.setZero();
 
-        setJointLimit(pkg_path + "Params/bounds.json");
-        setWeightMatrix(pkg_path + "Params/weight.json");
+        setJointLimit(pkg_path + "Params/QP_cartesian_velocity/bounds.json");
+        setWeightMatrix(pkg_path + "Params/QP_cartesian_velocity/weights.json");
 
-        is_first_ = true;
+        std::cout << "======================================================================" << std::endl;
+        std::cout << "=================== QP Cartesian Velocity loaded!! ===================" << std::endl;
+        std::cout << "======================================================================" << std::endl;
     }
 
-    QP::~QP()
+    void CartesianVelocity::setCurrentState(const Eigen::Matrix<double, 7, 1> &q_current, const Eigen::Matrix<double, 7, 1> &qdot_current, const Eigen::Matrix<double, 6, 7> &j_current)
     {
-
+        q_current_ = q_current;
+        qdot_current_ = qdot_current;
+        j_current_ = j_current;
+        // j_current_ = robot_model_.getJacobian(q_current_);
+    }
+    
+    void CartesianVelocity::setDesiredEEVel(const Eigen::Matrix<double, 6, 1> &xdot_desired)
+    {
+        xdot_desired_ = xdot_desired;
     }
 
-    void QP::setJointLimit(const std::string &file_path)
+    void CartesianVelocity::setJointLimit(const std::string &file_path)
     {
         std::ifstream iBounds(file_path);
         json jsonBounds;
@@ -127,7 +140,7 @@ namespace QP_CONTROLLER
         qddot_lower_(6) *= 0.1;
     }
 
-    void QP::setWeightMatrix(const std::string &file_path)
+    void CartesianVelocity::setWeightMatrix(const std::string &file_path)
     {
         std::ifstream iWeights(file_path);
         json jsonWeight;
@@ -151,18 +164,11 @@ namespace QP_CONTROLLER
         mani_weight_ = jsonWeight["mani"];
     }
 
-    bool QP::solveQP(Eigen::Matrix<double, 7, 1> &opt_qdot, TimeDuration &time_status)
+    void CartesianVelocity::setCost()
     {
-        SuhanBenchmark timer;
-        time_status.setZero();
+        P_ds_.block(si_index_.s1,  si_index_.s1,  ns_, ns_) = 2.0 * slack_weight_;
+        P_ds_.block(si_index_.dq1, si_index_.dq1, nq_, nq_) = 2.0 * damping_weight_;
 
-        Eigen::Matrix<double, nx, nx> P_ds;
-        P_ds.setZero();
-        P_ds.block(si_index.s1, si_index.s1, ns, ns) = 2.0 * slack_weight_;
-        P_ds.block(si_index.q1, si_index.q1, nq, nq) = 2.0 * damping_weight_;
-
-        Eigen::Matrix<double, nx, 1> q_ds;
-        q_ds.setZero();
         double mani = robot_model_.getManipulability(q_current_);
         double mani_cubic_weight;
         if(mani > 0.05) 
@@ -177,93 +183,41 @@ namespace QP_CONTROLLER
         {
             mani_cubic_weight = DyrosMath::cubic(mani, 0.01, 0.05, mani_weight_, 0., 0., 0.);
         }
-        q_ds.block(si_index.q1, 0, nq, 1) = -mani_cubic_weight * robot_model_.getDManipulability(q_current_);
-
-        Eigen::Matrix<double, nc, nx> A_ds;
-        A_ds.setZero();
-        A_ds.block(si_index.con_slack, si_index.s1, ns, ns).setIdentity(ns, ns);
-        A_ds.block(si_index.con_slack, si_index.q1, ns, nq) = j_current_;
-        A_ds.block(si_index.con_q, si_index.q1, nq, nq).setIdentity(nq, nq);
-        A_ds.block(si_index.con_qdot, si_index.q1, nq, nq).setIdentity(nq, nq);
-        A_ds.block(si_index.con_qddot, si_index.q1, nq, nq).setIdentity(nq, nq);
-
-        Eigen::Matrix<double, nc, 1> l_ds;
-        l_ds.setZero();
-        l_ds.block(si_index.con_slack, 0, ns, 1) = xdot_desired_;
-        l_ds.block(si_index.con_q, 0, nq, 1) = hz_ * (q_lower_ - q_current_);
-        l_ds.block(si_index.con_qdot, 0, nq, 1) = qdot_lower_;
-        l_ds.block(si_index.con_qddot, 0, nq, 1) = qddot_lower_ / hz_ + qdot_current_;
-        
-        Eigen::Matrix<double, nc, 1> u_ds;
-        u_ds.setZero();
-        u_ds.block(si_index.con_slack, 0, ns, 1) = xdot_desired_;
-        u_ds.block(si_index.con_q, 0, nq, 1) = hz_ * (q_upper_ - q_current_);
-        u_ds.block(si_index.con_qdot, 0, nq, 1) = qdot_upper_;
-        u_ds.block(si_index.con_qddot, 0, nq, 1) = qddot_upper_ / hz_ + qdot_current_;
-        time_status.set_qp = timer.elapsedAndReset();
-
-        
-        /* 
-        min   1/2 x' P x + q' x
-         x
-
-        subject to
-        l <= A x <= u
-
-        with :
-        P sparse (n x n) positive definite
-        q dense  (n x 1)
-        A sparse (nc x n)
-        l dense (nc x 1)
-        u dense (nc x 1)
-        (n = dof + ee_dof, nc = 2*ee_dof + dof + num_links)
-        */
-        Eigen::SparseMatrix<double> P(nx, nx);
-        Eigen::Matrix<double, nx, 1> q;
-        Eigen::SparseMatrix<double> A(nc, nx);
-        Eigen::Matrix<double, nc, 1> l, u;
-        P = P_ds.sparseView();
-        A = A_ds.sparseView();
-        q = q_ds;
-        l = l_ds;
-        u = u_ds;
-
-        OsqpEigen::Solver solver_;
-
-        // settings
-        solver_.settings()->setWarmStart(false);
-        solver_.settings()->getSettings()->eps_abs = 1e-4;
-        solver_.settings()->getSettings()->eps_rel = 1e-5;
-        solver_.settings()->getSettings()->verbose = false;
-
-        // set the initial data of the QP solver
-        solver_.data()->setNumberOfVariables(nx);
-        solver_.data()->setNumberOfConstraints(nc);
-        if (!solver_.data()->setHessianMatrix(P))           return false;
-        if (!solver_.data()->setGradient(q))                return false;
-        if (!solver_.data()->setLinearConstraintsMatrix(A)) return false;
-        if (!solver_.data()->setLowerBound(l))              return false;
-        if (!solver_.data()->setUpperBound(u))              return false;
-
-        // instantiate the solver
-        if (!solver_.initSolver()) return false;
-
-        // solve the QP problem
-        if (solver_.solveProblem() != OsqpEigen::ErrorExitFlag::NoError) return false;
-        qp_status_ = solver_.getStatus();
-        if (solver_.getStatus() != OsqpEigen::Status::Solved) return false;
-        // if (solver_.getStatus() != OsqpEigen::Status::Solved && solver_.getStatus() != OsqpEigen::Status::SolvedInaccurate) return false;
-
-        time_status.set_solver = timer.elapsedAndReset();
-
-        auto sol = solver_.getSolution();
-        opt_qdot = sol.segment(si_index.q1, nq);
-
-        time_status.solve_qp = timer.elapsedAndReset();
-
-        solver_.clearSolverVariables();
-        solver_.clearSolver();
-
-        return true;
+        q_ds_.block(si_index_.dq1, 0, nq_, 1) = -mani_cubic_weight * robot_model_.getDManipulability(q_current_);
     }
-}
+
+    void CartesianVelocity::setConstraint()
+    {
+        A_ds_.block(si_index_.con_slack, si_index_.s1,  ns_, ns_).setIdentity(ns_, ns_);
+        A_ds_.block(si_index_.con_slack, si_index_.dq1, ns_, nq_) = j_current_;
+        A_ds_.block(si_index_.con_q,     si_index_.dq1, nq_, nq_).setIdentity(nq_, nq_);
+        A_ds_.block(si_index_.con_qdot,  si_index_.dq1, nq_, nq_).setIdentity(nq_, nq_);
+        A_ds_.block(si_index_.con_qddot, si_index_.dq1, nq_, nq_).setIdentity(nq_, nq_);
+
+        l_ds_.block(si_index_.con_slack, 0, ns_, 1) = xdot_desired_;
+        l_ds_.block(si_index_.con_q,     0, nq_, 1) = hz_ * (q_lower_ - q_current_);
+        l_ds_.block(si_index_.con_qdot,  0, nq_, 1) = qdot_lower_;
+        l_ds_.block(si_index_.con_qddot, 0, nq_, 1) = qddot_lower_ / hz_ + qdot_current_;
+        
+        u_ds_.block(si_index_.con_slack, 0, ns_, 1) = xdot_desired_;
+        u_ds_.block(si_index_.con_q,     0, nq_, 1) = hz_ * (q_upper_ - q_current_);
+        u_ds_.block(si_index_.con_qdot,  0, nq_, 1) = qdot_upper_;
+        u_ds_.block(si_index_.con_qddot, 0, nq_, 1) = qddot_upper_ / hz_ + qdot_current_;
+    }
+
+    bool CartesianVelocity::getOptJointVel(Eigen::Matrix<double, 7, 1> &opt_qdot, TimeDuration &time_status)
+    {
+        Eigen::MatrixXd sol;
+        bool status = solveQP(sol, time_status);
+        if(status == true)
+        {
+            opt_qdot = sol.block(si_index_.dq1, 0, nq_, 1);
+        }
+        else
+        {
+            opt_qdot.setZero(nq_, 1);
+        }
+        return status;
+    }
+
+} // namespace QP

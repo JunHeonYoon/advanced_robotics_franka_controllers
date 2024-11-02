@@ -1,5 +1,5 @@
 
-#include <advanced_robotics_franka_controllers/jh_controller.h>
+#include <advanced_robotics_franka_controllers/jh_controller_position.h>
 #include <cmath>
 #include <memory>
 
@@ -14,27 +14,27 @@
 namespace advanced_robotics_franka_controllers
 {
 // ---------------------------default controller function-----------------------------------------
-bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle)
+bool jh_controller_position::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& node_handle)
 {
 	std::vector<std::string> joint_names;
   std::string arm_id;
   ROS_WARN(
-      "jh_controller: Make sure your robot's endeffector is in contact "
+      "jh_controller_position: Make sure your robot's endeffector is in contact "
       "with a horizontal surface before starting the controller!");
   if (!node_handle.getParam("arm_id", arm_id)) {
-    ROS_ERROR("jh_controller: Could not read parameter arm_id");
+    ROS_ERROR("jh_controller_position: Could not read parameter arm_id");
     return false;
   }
   if (!node_handle.getParam("joint_names", joint_names) || joint_names.size() != 7) {
     ROS_ERROR(
-        "jh_controller: Invalid or no joint_names parameters provided, aborting "
+        "jh_controller_position: Invalid or no joint_names parameters provided, aborting "
         "controller init!");
     return false;
   }
 
   auto* model_interface = robot_hw->get<franka_hw::FrankaModelInterface>();
   if (model_interface == nullptr) {
-    ROS_ERROR_STREAM("jh_controller: Error getting model interface from hardware");
+    ROS_ERROR_STREAM("jh_controller_position: Error getting model interface from hardware");
     return false;
   }
   try {
@@ -42,13 +42,13 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
         model_interface->getHandle(arm_id + "_model"));
   } catch (hardware_interface::HardwareInterfaceException& ex) {
     ROS_ERROR_STREAM(
-        "jh_controller: Exception getting model handle from interface: " << ex.what());
+        "jh_controller_position: Exception getting model handle from interface: " << ex.what());
     return false;
   }
 
   auto* state_interface = robot_hw->get<franka_hw::FrankaStateInterface>();
   if (state_interface == nullptr) {
-    ROS_ERROR_STREAM("jh_controller: Error getting state interface from hardware");
+    ROS_ERROR_STREAM("jh_controller_position: Error getting state interface from hardware");
     return false;
   }
   try {
@@ -56,25 +56,27 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
         state_interface->getHandle(arm_id + "_robot"));
   } catch (hardware_interface::HardwareInterfaceException& ex) {
     ROS_ERROR_STREAM(
-        "jh_controller: Exception getting state handle from interface: " << ex.what());
+        "jh_controller_position: Exception getting state handle from interface: " << ex.what());
     return false;
   }
 
-  auto* velocity_joint_interface = robot_hw->get<hardware_interface::VelocityJointInterface>();
-  if (velocity_joint_interface == nullptr) {
-    ROS_ERROR_STREAM("jh_controller: Error getting velocity joint interface from hardware");
+  auto* position_joint_interface = robot_hw->get<hardware_interface::PositionJointInterface>();
+  if (position_joint_interface == nullptr) {
+    ROS_ERROR_STREAM("jh_controller_position: Error getting position joint interface from hardware");
     return false;
   }
   for (size_t i = 0; i < 7; ++i) {
     try {
-      joint_handles_.push_back(velocity_joint_interface->getHandle(joint_names[i]));
+      joint_handles_.push_back(position_joint_interface->getHandle(joint_names[i]));
     } catch (const hardware_interface::HardwareInterfaceException& ex) {
-      ROS_ERROR_STREAM("jh_controller: Exception getting joint handles: " << ex.what());
+      ROS_ERROR_STREAM("jh_controller_position: Exception getting joint handles: " << ex.what());
       return false;
     }
   }
 
-  mode_change_thread_ = std::thread(&jh_controller::modeChangeReaderProc, this);
+  debug_file_.open(pkg_path + "debug/jh_controller_position.txt");
+
+  mode_change_thread_ = std::thread(&jh_controller_position::modeChangeReaderProc, this);
   control_mode_pub_ = node_handle.advertise<std_msgs::Int32>("/franka_state_controller/control_mode",1);
   
   q_desired_.setZero();
@@ -83,21 +85,19 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   EE_pose_pub_ = node_handle.advertise<geometry_msgs::PoseStamped>("/franka_state_controller/ee_pose",1);
   joint_pub_ = node_handle.advertise<sensor_msgs::JointState>("/franka_state_controller/joint_state_jh",1);
 
-  qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocity>();
-  qp_joint_position_ = std::make_unique<QP::JointPosition>();
-  async_qp_cartesian_velocity_thread_ = std::thread(&jh_controller::asyncQPCartesianVelocityProc, this);
-  async_qp_joint_position_thread_ = std::thread(&jh_controller::asyncQPJointPositionProc, this);
+  qp_controller_ = std::make_unique<QP_CONTROLLER::QP>();
+  async_qp_controller_thread_ = std::thread(&jh_controller_position::asyncQPControllerProc, this);
 
-  // fcl_calculator_ = std::make_unique<FCLModel>(node_handle);
-  // async_fcl_thread_ = std::thread(&jh_controller::asyncFCLProc, this);
+  fcl_calculator_ = std::make_unique<FCLModel>(node_handle);
+  async_fcl_thread_ = std::thread(&jh_controller_position::asyncFCLProc, this);
 
-  haptic_pose_sub_ = node_handle.subscribe<geometry_msgs::PoseStamped>("/haptic/pose", 1, &jh_controller::hapticPoseCallback, this);
-  haptic_encoder_ori_sub_ = node_handle.subscribe<std_msgs::Float32MultiArray>("/haptic/encoder_orientation", 1, &jh_controller::hapticEncoderOrientationCallback, this);
-  haptic_twist_sub_ = node_handle.subscribe<geometry_msgs::Twist>("/haptic/twist", 1, &jh_controller::hapticTwistCallback, this);
-  haptic_button_sub_ = node_handle.subscribe<std_msgs::Int8MultiArray>("/haptic/button_state", 1, &jh_controller::hapticButtonCallback, this);
+  haptic_pose_sub_ = node_handle.subscribe<geometry_msgs::PoseStamped>("/haptic/pose", 1, &jh_controller_position::hapticPoseCallback, this);
+  haptic_encoder_ori_sub_ = node_handle.subscribe<std_msgs::Float32MultiArray>("/haptic/encoder_orientation", 1, &jh_controller_position::hapticEncoderOrientationCallback, this);
+  haptic_twist_sub_ = node_handle.subscribe<geometry_msgs::Twist>("/haptic/twist", 1, &jh_controller_position::hapticTwistCallback, this);
+  haptic_button_sub_ = node_handle.subscribe<std_msgs::Int8MultiArray>("/haptic/button_state", 1, &jh_controller_position::hapticButtonCallback, this);
   haptic_vel_command_.setZero();
 
-  joint_command_sub_ = node_handle.subscribe<sensor_msgs::JointState>("/panda/positioncommand", 1, &jh_controller::jointCommandCallback, this);
+  joint_command_sub_ = node_handle.subscribe<sensor_msgs::JointState>("/panda/positioncommand", 1, &jh_controller_position::jointCommandCallback, this);
 
   gripper_ac_homing_.waitForServer();  
   gripper_ac_homing_.sendGoal(franka_gripper::HomingGoal());
@@ -107,7 +107,7 @@ bool jh_controller::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   return true;
 }
 
-void jh_controller::starting(const ros::Time& time) {
+void jh_controller_position::starting(const ros::Time& time) {
   start_time_ = time;
   play_time_ = time;
   control_start_time_ = time;
@@ -131,17 +131,17 @@ void jh_controller::starting(const ros::Time& time) {
   rotation_init_ = rotation_;
 }
 
-void jh_controller::update(const ros::Time& time, const ros::Duration& period) 
+void jh_controller_position::update(const ros::Time& time, const ros::Duration& period) 
 {
 
-  jh_controller::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
+  jh_controller_position::getCurrentState(); // compute q(dot), dynamic, jacobian, EE pose(velocity)
 
   play_time_ += period;
   if(calculation_mutex_.try_lock())
   {
       calculation_mutex_.unlock();
       if(async_calculation_thread_.joinable()) async_calculation_thread_.join();
-      async_calculation_thread_ = std::thread(&jh_controller::asyncCalculationProc, this);
+      async_calculation_thread_ = std::thread(&jh_controller_position::asyncCalculationProc, this);
   }
   ros::Rate r(30000);
   for(size_t i=0; i<9; ++i)
@@ -155,18 +155,29 @@ void jh_controller::update(const ros::Time& time, const ros::Duration& period)
       }
   }
 
-  jh_controller::printState();
-  jh_controller::setDesiredJointVel(qdot_desired_);
+  // if(print_rate_trigger_()) std::cout << "hz: " << 1./period.toSec() << std::endl;
+
+  // if(control_mode_ == ROS_SUB)
+  // {
+  //   debug_file_ << std::fixed << std::setprecision(10) << play_time_.toSec() -  control_start_time_.toSec()<< " "
+  //               << q_.transpose() << " "
+  //               << q_desired_.transpose() << " "
+  //               << qdot_.transpose() << " "
+  //               << qdot_desired_.transpose() << std::endl;
+  // }
+
+  jh_controller_position::printState();
+  jh_controller_position::setDesiredJoint(q_desired_);
 }
 
-void jh_controller::stopping(const ros::Time & /*time*/)
+void jh_controller_position::stopping(const ros::Time & /*time*/)
 {
-  ROS_INFO("jh_controller::stopping");
+  ROS_INFO("jh_controller_position::stopping");
 }
 // ------------------------------------------------------------------------------------------------
 
 // --------------------------- funciotn from robotics class -----------------------------------------
-void jh_controller::printState()
+void jh_controller_position::printState()
 {
   if (print_rate_trigger_()) 
     {
@@ -193,25 +204,25 @@ void jh_controller::printState()
     std::cout << "gripper mode   :\t";
 		if(gripper_command_ == OPEN) std::cout << "OPEN" << std::endl;
 		else if(gripper_command_ == CLOSE) std::cout << "CLOSE" << std::endl;
-    // std::cout << "Minimum dist (cm): " << std::fixed << std::setprecision(3) << min_dist_*100. << std::endl;
-    // std::cout << "Minimum dist pair: " << min_dist_pair_.first << ", " << min_dist_pair_.second << std::endl;
+    std::cout << "Minimum dist (cm): " << std::fixed << std::setprecision(3) << min_dist_*100. << std::endl;
+    std::cout << "Minimum dist pair: " << min_dist_pair_.first << ", " << min_dist_pair_.second << std::endl;
 
     std::cout << "-------------------------------------------------------------------\n\n" << std::endl;
   }
 }
 
-void jh_controller::moveJointPosition(const Eigen::Matrix<double, 7, 1> &target_q, double duration)
+void jh_controller_position::moveJointPosition(const Eigen::Matrix<double, 7, 1> &target_q, double duration)
 {
   for(size_t i=0; i<7;i++)
   {
     q_desired_(i) = DyrosMath::cubic(play_time_.toSec(), control_start_time_.toSec(), control_start_time_.toSec() + duration,
-                                        q_init_(i), target_q(i), 0, 0);
+                                        q_init_(i), target_q(i), qdot_init_(i), 0);
     qdot_desired_(i) = DyrosMath::cubicDot(play_time_.toSec(), control_start_time_.toSec(), control_start_time_.toSec() + duration,
-                                        q_init_(i), target_q(i), 0, 0);
+                                        q_init_(i), target_q(i), qdot_init_(i), 0);
   }
 }
 
-int jh_controller::kbhit(void)
+int jh_controller_position::kbhit(void)
 {
 	struct termios oldt, newt;
 	int ch;
@@ -237,15 +248,16 @@ int jh_controller::kbhit(void)
 
 	return 0;
 }
+
 // --------------------------- Controller Core Methods -----------------------------------------
-void jh_controller::setMode(const CTRL_MODE & mode)
+void jh_controller_position::setMode(const CTRL_MODE & mode)
 {
   is_mode_changed_ = true;
   control_mode_ = mode;
   std::cout << "Current mode (changed): " << mode << std::endl;
 }
 
-void jh_controller::getCurrentState()
+void jh_controller_position::getCurrentState()
 {
   const franka::RobotState &robot_state = state_handle_->getRobotState();
   const std::array<double, 42> &jacobian_array =
@@ -307,7 +319,7 @@ void jh_controller::getCurrentState()
   }
 }
 
-void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desired_qdot)
+void jh_controller_position::setDesiredJoint(const Eigen::Matrix<double, 7, 1> & desired_q)
 {
   // if(min_dist_*100. < 0.)
   // {
@@ -320,7 +332,8 @@ void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desir
   // else
   // {
 
-    Eigen::Matrix<double, 7, 1> lpf_command = LowPassFilter(desired_qdot, qdot_, hz_, 100.0);
+    Eigen::Matrix<double, 7, 1> lpf_command = LowPassFilter(desired_q, q_, hz_, 100.0);
+    // Eigen::Matrix<double, 7, 1> lpf_command =desired_q;
     for (size_t i = 0; i < 7; ++i) 
     {
       joint_handles_[i].setCommand(lpf_command(i));
@@ -328,89 +341,56 @@ void jh_controller::setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desir
   // }
 }
 
-void jh_controller::asyncQPCartesianVelocityProc()
+void jh_controller_position::asyncQPControllerProc()
 {
   SuhanBenchmark timer;
   while(!quit_all_proc_)
   {
-    std::this_thread::sleep_for(std::chrono::microseconds(1));
-    if(qp_cartesian_velocity_thread_enabled_ && qp_cartesian_velocity_trigger_())
+    if(qp_controller_thread_enabled_ == true && qp_controller_trigger_())
     {
       timer.reset();
-      qp_cartesian_velocity_input_mutex_.lock();
-      qp_cartesian_velocity_->setCurrentState(q_, qdot_, j_);
-      qp_cartesian_velocity_->setDesiredEEVel(haptic_vel_command_);
-      qp_cartesian_velocity_input_mutex_.unlock();
+      qp_controller_input_mutex_.lock();
+      qp_controller_->setCurrentState(q_, qdot_, j_);
+      qp_controller_->setDesiredEEVel(haptic_vel_command_);
+      qp_controller_input_mutex_.unlock();
 
       Eigen::Matrix<double, 7, 1> opt_qdot;
-      QP::TimeDuration time_status;
-      bool status = qp_cartesian_velocity_->getOptJointVel(opt_qdot, time_status);
-
-      qp_cartesian_velocity_input_mutex_.lock();
-      qdot_desired_ = opt_qdot;
-      qp_cartesian_velocity_input_mutex_.unlock();
-      if(!status)
+      QP_CONTROLLER::TimeDuration time_status;
+      bool status = qp_controller_->solveQP(opt_qdot, time_status);
+      if(status)
       {
+        // ROS_INFO("QP solved!!!");
+        qp_controller_input_mutex_.lock();
+        qdot_desired_ = opt_qdot;
+        qp_controller_input_mutex_.unlock();
+      }
+      else
+      {
+        opt_qdot.setZero();
         ROS_INFO("QP did not solved!!!");
+        qdot_desired_ = opt_qdot;
       }
       double elapsed_time = timer.elapsedAndReset();
-      // if(print_rate_trigger_())
-      // {
-      //   std::cout << "qp controller hz: " << 1. / elapsed_time << std::endl;
-      //   std::cout << "qp set_qp  hz   : " << 1. / time_status.set_qp << std::endl;
-      //   std::cout << "qp set_solver hz: " << 1. / time_status.set_solver << std::endl;
-      //   std::cout << "qp solve_qp hz  : " << 1. / time_status.solve_qp << std::endl;
-      // }
+      if(print_rate_trigger_())
+      {
+        std::cout << "qp controller hz: " << 1. / elapsed_time << std::endl;
+        std::cout << "qp set_qp  hz   : " << 1. / time_status.set_qp << std::endl;
+        std::cout << "qp set_solver hz: " << 1. / time_status.set_solver << std::endl;
+        std::cout << "qp solve_qp hz  : " << 1. / time_status.solve_qp << std::endl;
+      }
     }
   }
 }
 
-void jh_controller::asyncQPJointPositionProc()
+void jh_controller_position::asyncFCLProc()
 {
-  SuhanBenchmark timer;
   while(!quit_all_proc_)
   {
-    std::this_thread::sleep_for(std::chrono::microseconds(1));
-    if(qp_joint_position_thread_enabled_ && qp_joint_position_trigger_())
-    {
-      timer.reset();
-      qp_joint_position_input_mutex_.lock();
-      qp_joint_position_->setCurrentState(q_, qdot_);
-      qp_joint_position_->setDesiredJointPosition(joint_command_);
-      qp_joint_position_input_mutex_.unlock();
-
-      Eigen::Matrix<double, 7, 1> opt_qdot;
-      QP::TimeDuration time_status;
-      bool status = qp_joint_position_->getOptJointVel(opt_qdot, time_status);
-
-      qp_joint_position_input_mutex_.lock();
-      qdot_desired_ = opt_qdot;
-      qp_joint_position_input_mutex_.unlock();
-      if(!status)
-      {
-        ROS_INFO("QP did not solved!!!");
-      }
-      double elapsed_time = timer.elapsedAndReset();
-      // if(print_rate_trigger_())
-      // {
-      //   std::cout << "qp controller hz: " << 1. / elapsed_time << std::endl;
-      //   std::cout << "qp set_qp  hz   : " << 1. / time_status.set_qp << std::endl;
-      //   std::cout << "qp set_solver hz: " << 1. / time_status.set_solver << std::endl;
-      //   std::cout << "qp solve_qp hz  : " << 1. / time_status.solve_qp << std::endl;
-      // }
-    }
+    fcl_calculator_->getMinDistance(min_dist_pair_, min_dist_);
   }
 }
 
-// void jh_controller::asyncFCLProc()
-// {
-//   while(!quit_all_proc_)
-//   {
-//     fcl_calculator_->getMinDistance(min_dist_pair_, min_dist_);
-//   }
-// }
-
-void jh_controller::asyncCalculationProc()
+void jh_controller_position::asyncCalculationProc()
   {
     bench_timer_.reset();
     calculation_mutex_.lock();
@@ -426,23 +406,15 @@ void jh_controller::asyncCalculationProc()
       rotation_init_ = rotation_;
       transform_init_ = transform_;
       joint_command_ = q_init_;
-      qp_cartesian_velocity_input_mutex_.lock();
+      qp_controller_input_mutex_.lock();
       if(control_mode_ == TELEOPERATE) 
       {
-        qp_cartesian_velocity_thread_enabled_ = true;
+        qp_controller_thread_enabled_ = true;
         // is_haptic_first_ = true;
         tele_z_enable_ = true;
       }
-      else qp_cartesian_velocity_thread_enabled_ = false;
-      qp_cartesian_velocity_input_mutex_.unlock();
-
-      qp_joint_position_input_mutex_.lock();
-      if(control_mode_ == ROS_SUB) 
-      {
-        qp_joint_position_thread_enabled_ = true;
-      }
-      else qp_joint_position_thread_enabled_ = false;
-      qp_joint_position_input_mutex_.unlock();
+      else qp_controller_thread_enabled_ = false;
+      qp_controller_input_mutex_.unlock();
 
       std_msgs::Int32 msg;
       msg.data = control_mode_;
@@ -453,7 +425,7 @@ void jh_controller::asyncCalculationProc()
     {
       Eigen::Matrix<double, 7, 1> target_q;
       target_q << 0, 0, 0, -M_PI/2, 0, M_PI/2, M_PI/4;
-      jh_controller::moveJointPosition(target_q, 5.0);
+      jh_controller_position::moveJointPosition(target_q, 5.0);
     }
     else if(control_mode_ == TELEOPERATE)
     {
@@ -461,7 +433,7 @@ void jh_controller::asyncCalculationProc()
     }
     else if(control_mode_ == ROS_SUB)
     {
-      q_desired_ = q_ + qdot_desired_ / hz_;
+      jh_controller_position::moveJointPosition(joint_command_, 1.0);
     }
     else
     {
@@ -477,7 +449,7 @@ void jh_controller::asyncCalculationProc()
     // if(print_rate_trigger_()) std::cout << "calculation proc freq: " << 1./elapsed_time << std::endl;
   }
 
-void jh_controller::modeChangeReaderProc()
+void jh_controller_position::modeChangeReaderProc()
 {
    while (!quit_all_proc_)
     {
@@ -488,10 +460,10 @@ void jh_controller::modeChangeReaderProc()
         switch (key)
         {
           case 'h':
-            jh_controller::setMode(HOME);
+            jh_controller_position::setMode(HOME);
             break;
           case 't':
-            jh_controller::setMode(TELEOPERATE);
+            jh_controller_position::setMode(TELEOPERATE);
             break;
           case ' ':
             if(gripper_command_ == OPEN)
@@ -526,10 +498,10 @@ void jh_controller::modeChangeReaderProc()
             }
             break;
           case 'a':
-            jh_controller::setMode(ROS_SUB);
+            jh_controller_position::setMode(ROS_SUB);
             break;
           default:
-            jh_controller::setMode(NONE);
+            jh_controller_position::setMode(NONE);
             break;
         }
         calculation_mutex_.unlock();
@@ -537,7 +509,7 @@ void jh_controller::modeChangeReaderProc()
     }
 }
 
-void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
+void jh_controller_position::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
   double max_lin_vel = 0.1;
   // double max_ang_vel = 0.1;
@@ -602,7 +574,7 @@ void jh_controller::hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPt
   // haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
-void jh_controller::hapticEncoderOrientationCallback(const std_msgs::Float32MultiArray::ConstPtr& msg)
+void jh_controller_position::hapticEncoderOrientationCallback(const std_msgs::Float32MultiArray::ConstPtr& msg)
 {
   double max_ang_vel = 0.5;
 
@@ -635,7 +607,7 @@ void jh_controller::hapticEncoderOrientationCallback(const std_msgs::Float32Mult
   haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
-void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg)
+void jh_controller_position::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg)
 {
   double max_ang_vel = 0.3;
 
@@ -649,7 +621,7 @@ void jh_controller::hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& ms
     // haptic_vel_command_.tail(3) = LowPassFilter(ang_command, haptic_vel_command_.tail(3), 1000.0, 1.0);
 }
 
-void jh_controller::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg)
+void jh_controller_position::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg)
 {
   button_state_ = msg->data[0];
   // if(pre_button_state_ == 0)
@@ -681,7 +653,7 @@ void jh_controller::hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPt
   // pre_button_state_ = button_state_;
 }
 
-void jh_controller::jointCommandCallback(const sensor_msgs::JointState::ConstPtr& msg)
+void jh_controller_position::jointCommandCallback(const sensor_msgs::JointState::ConstPtr& msg)
 {
   joint_command_(0) = msg->position[0];
   joint_command_(1) = msg->position[1];
@@ -692,8 +664,13 @@ void jh_controller::jointCommandCallback(const sensor_msgs::JointState::ConstPtr
   joint_command_(6) = msg->position[6];
 
 
+
+  
   if(control_mode_ == ROS_SUB)
   {
+    q_init_ = q_;
+    qdot_init_ = qdot_;
+    control_start_time_ = play_time_;
     if(msg->position[7] > 0.04)
     {
       if(gripper_command_ == CLOSE)
@@ -724,7 +701,7 @@ void jh_controller::jointCommandCallback(const sensor_msgs::JointState::ConstPtr
   }
 }
 
-Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq)
+Eigen::MatrixXd jh_controller_position::LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq)
 {
 
   double rc = 1. / (cutoff_freq * 2 * M_PI);
@@ -732,6 +709,8 @@ Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const
   double a = dt / (rc + dt);
   return prev_res + a * (input - prev_res);
 }
+
+
 // ------------------------------------------------------------------------------------------------
 
 
@@ -741,5 +720,5 @@ Eigen::MatrixXd jh_controller::LowPassFilter(const Eigen::MatrixXd &input, const
 
 
 
-PLUGINLIB_EXPORT_CLASS(advanced_robotics_franka_controllers::jh_controller,
+PLUGINLIB_EXPORT_CLASS(advanced_robotics_franka_controllers::jh_controller_position,
                        controller_interface::ControllerBase)

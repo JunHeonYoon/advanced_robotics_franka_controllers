@@ -10,6 +10,8 @@
 
 #include <thread>
 #include <mutex>
+#include <chrono>
+
 
 #include <controller_interface/multi_interface_controller.h>
 #include <dynamic_reconfigure/server.h>
@@ -29,9 +31,10 @@
 #include <sensor_msgs/JointState.h>
 #include <Eigen/Dense>
 
-#include "advanced_robotics_franka_controllers/QP_controller.h"
+#include "advanced_robotics_franka_controllers/QP_cartesian_velocity.h"
+#include "advanced_robotics_franka_controllers/QP_joint_position.h"
 #include "suhan_benchmark.h"
-#include "advanced_robotics_franka_controllers/fcl_model.h"
+// #include "advanced_robotics_franka_controllers/fcl_model.h"
 #include "math_type_define.h"
 
 #include <actionlib/client/simple_action_client.h>
@@ -39,6 +42,9 @@
 #include <franka_gripper/GraspAction.h>
 #include <franka_gripper/HomingAction.h>
 #include <franka_gripper/MoveAction.h>
+
+#include <fcntl.h>
+#include <termios.h>
 
 
 namespace advanced_robotics_franka_controllers {
@@ -60,7 +66,8 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   std::vector<hardware_interface::JointHandle> joint_handles_;
 
   franka_hw::TriggerRate print_rate_trigger_{10}; 
-  franka_hw::TriggerRate qp_controller_trigger_{200}; 
+  franka_hw::TriggerRate qp_cartesian_velocity_trigger_{200}; 
+  franka_hw::TriggerRate qp_joint_position_trigger_{200}; 
   franka_hw::TriggerRate state_pub_trigger_{100}; 
 	
   // initial state
@@ -110,23 +117,27 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   ros::Publisher EE_pose_pub_;
   ros::Publisher joint_pub_;
 
-  enum CTRL_MODE{NONE, HOME, TELEOPERATE};
+  enum CTRL_MODE{NONE, HOME, TELEOPERATE, ROS_SUB};
   CTRL_MODE control_mode_{NONE};
 	bool is_mode_changed_ {false};
   ros::Publisher control_mode_pub_;
 
-  std::unique_ptr<QP_CONTROLLER::QP> qp_controller_;
-  std::unique_ptr<FCLModel> fcl_calculator_;
+  std::unique_ptr<QP::CartesianVelocity> qp_cartesian_velocity_;
+  std::unique_ptr<QP::JointPosition> qp_joint_position_;
+  // std::unique_ptr<FCLModel> fcl_calculator_;
 
   std::mutex calculation_mutex_;
-  std::mutex qp_controller_input_mutex_;
+  std::mutex qp_cartesian_velocity_input_mutex_;
+  std::mutex qp_joint_position_input_mutex_;
 
   bool quit_all_proc_{false};
   std::thread async_calculation_thread_;
-  std::thread async_qp_controller_thread_;
-  std::thread async_fcl_thread_;
+  std::thread async_qp_cartesian_velocity_thread_;
+  std::thread async_qp_joint_position_thread_;
+  // std::thread async_fcl_thread_;
   std::thread mode_change_thread_;
-  bool qp_controller_thread_enabled_ = false;
+  bool qp_cartesian_velocity_thread_enabled_{false};
+  bool qp_joint_position_thread_enabled_{false};
 
   ros::Subscriber haptic_pose_sub_;
   ros::Subscriber haptic_encoder_ori_sub_;
@@ -148,28 +159,36 @@ class jh_controller : public controller_interface::MultiInterfaceController<
   actionlib::SimpleActionClient<franka_gripper::HomingAction> gripper_ac_homing_
   {"/franka_gripper/homing", true};
 
-  float min_dist_;
-  std::pair<std::string, std::string> min_dist_pair_;
+  // float min_dist_;
+  // std::pair<std::string, std::string> min_dist_pair_;
 
+  ros::Subscriber joint_command_sub_;
+  Eigen::Matrix<double, 7, 1> joint_command_;
 
   void hapticPoseCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
   void hapticEncoderOrientationCallback(const std_msgs::Float32MultiArray::ConstPtr& msg);
   void hapticTwistCallback(const geometry_msgs::Twist::ConstPtr& msg);
   void hapticButtonCallback(const std_msgs::Int8MultiArray::ConstPtr& msg);
 
+  void jointCommandCallback(const sensor_msgs::JointState::ConstPtr& msg);
+
+  bool tele_z_enable_{true};
+
   Eigen::MatrixXd LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq);
 
   void printState();
   void moveJointPosition(const Eigen::Matrix<double, 7, 1> & target_q, double duration);
-  
+  int kbhit(void);
+
   void setMode(const CTRL_MODE & mode);
   void getCurrentState();
   void setDesiredJointVel(const Eigen::Matrix<double, 7, 1> & desired_qdot);
 
   void modeChangeReaderProc();
   void asyncCalculationProc();
-  void asyncQPControllerProc();
-  void asyncFCLProc();
+  void asyncQPCartesianVelocityProc();
+  void asyncQPJointPositionProc();
+  // void asyncFCLProc();
 };
 
 }  // namespace advanced_robotics_franka_controllers
